@@ -71,7 +71,7 @@ class Poller:
 
         try:
             issues = self._linear.get_eligible_issues(
-                self._config.linear_project_id,
+                self._config.linear_team_id,
                 self._config.eligibility_state,
             )
         except Exception:

@@ -32,7 +32,7 @@ def load_workflow() -> dict:
 class Config:
     workflow: dict
     linear_api_key: str
-    linear_project_id: str
+    linear_team_id: str
     figma_api_key: Optional[str]
     github_token: Optional[str]
 
@@ -83,10 +83,14 @@ def load_config() -> Config:
             "Run: resonance setup  to configure interactively."
         )
 
-    linear_project_id = os.environ.get("LINEAR_PROJECT_ID", "").strip()
-    if not linear_project_id:
+    # Accept LINEAR_TEAM_ID (preferred) or LINEAR_PROJECT_ID (legacy name)
+    linear_team_id = (
+        os.environ.get("LINEAR_TEAM_ID", "").strip()
+        or os.environ.get("LINEAR_PROJECT_ID", "").strip()
+    )
+    if not linear_team_id:
         raise ValueError(
-            "LINEAR_PROJECT_ID is required.\n"
+            "LINEAR_TEAM_ID is required.\n"
             "Set it in your .env file or as an environment variable.\n"
             "Run: resonance setup  to configure interactively."
         )
@@ -94,7 +98,7 @@ def load_config() -> Config:
     return Config(
         workflow=workflow,
         linear_api_key=linear_api_key,
-        linear_project_id=linear_project_id,
+        linear_team_id=linear_team_id,
         figma_api_key=os.environ.get("FIGMA_API_KEY") or None,
         github_token=os.environ.get("GITHUB_TOKEN") or None,
     )

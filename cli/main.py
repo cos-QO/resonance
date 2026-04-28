@@ -18,9 +18,13 @@ Usage examples:
   resonance watch                                    TUI dashboard (Milestone 2)
 """
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
+
+# Matches: linear.app/workspace/team/KEY/anything
+_LINEAR_TEAM_URL_RE = re.compile(r'linear\.app/[\w-]+/team/([A-Z0-9]+)', re.IGNORECASE)
 
 import typer
 from rich.console import Console
@@ -109,64 +113,78 @@ def setup(
         console.print(f"  [red]✗ Linear API key invalid:[/red] {e}")
         raise typer.Exit(1)
 
-    # ── Step 2: Project ID ────────────────────────────────────────────────────
+    # ── Step 2: Team ──────────────────────────────────────────────────────────
     console.print()
-    console.print("[bold]Step 2/4[/bold]  Linear project")
-    console.print("  [dim]Resonance will watch this project for issues to work on.[/dim]")
-    console.print("  [dim]Fetching your projects…[/dim]")
+    console.print("[bold]Step 2/4[/bold]  Linear team")
+    console.print("  [dim]Resonance watches a team's issues — not a specific project.[/dim]")
+    console.print("  [dim]Fetching your teams…[/dim]")
     console.print()
 
-    project_id = os.environ.get("LINEAR_PROJECT_ID") or env_values.get("LINEAR_PROJECT_ID", "")
+    # Accept LINEAR_TEAM_ID (new) or LINEAR_PROJECT_ID (legacy)
+    team_id = (
+        os.environ.get("LINEAR_TEAM_ID")
+        or env_values.get("LINEAR_TEAM_ID", "")
+        or os.environ.get("LINEAR_PROJECT_ID")
+        or env_values.get("LINEAR_PROJECT_ID", "")
+    )
 
-    if not project_id and not non_interactive:
+    if not team_id and not non_interactive:
         try:
-            projects = client.get_projects()
-            if projects:
-                for i, p in enumerate(projects[:20], 1):
-                    console.print(f"  [bold cyan]{i:2d}[/bold cyan]  {p['name']}")
-                    console.print(f"      [dim]{p['id']}[/dim]")
-                    console.print()
-                raw = typer.prompt("  Type a number to select a project")
-                if raw.isdigit() and 1 <= int(raw) <= len(projects):
-                    project_id = projects[int(raw) - 1]["id"]
-                else:
-                    project_id = raw.strip()
-            else:
-                console.print("  [yellow]No projects found on this account.[/yellow]")
-                console.print("  [dim]Create a project in Linear first, then re-run setup.[/dim]")
+            teams = client.get_teams()
+            if not teams:
+                console.print("  [yellow]No teams found on this account.[/yellow]")
                 raise typer.Exit(1)
+
+            for i, t in enumerate(teams, 1):
+                console.print(f"  [bold cyan]{i:2d}[/bold cyan]  {t['name']}  [dim][{t['key']}][/dim]")
+            console.print()
+            console.print("  [dim]You can also paste a team URL, e.g.:[/dim]")
+            console.print("  [dim]https://linear.app/queen-one/team/RND/all[/dim]")
+            console.print()
+            raw = typer.prompt("  Type a number or paste a team URL").strip()
+
+            # URL paste — extract team key and match against fetched teams
+            url_match = _LINEAR_TEAM_URL_RE.search(raw)
+            if url_match:
+                key = url_match.group(1).upper()
+                matched = next((t for t in teams if t["key"].upper() == key), None)
+                if matched:
+                    team_id = matched["id"]
+                    console.print(f"  [dim]Resolved {key} → {matched['name']}[/dim]")
+                else:
+                    console.print(f"  [red]✗ Team key '{key}' not found in your workspace.[/red]")
+                    raise typer.Exit(1)
+            elif raw.isdigit() and 1 <= int(raw) <= len(teams):
+                team_id = teams[int(raw) - 1]["id"]
+            else:
+                team_id = raw  # treat as direct UUID
+
         except typer.Exit:
             raise
-        except Exception:
-            console.print("  [dim]Could not fetch projects — paste your project UUID manually.[/dim]")
-            console.print("  [dim]Find it in Linear: open the project → copy the UUID from the URL[/dim]")
-            console.print("  [dim]URL format: linear.app/your-workspace/project/<UUID>/overview[/dim]")
-            project_id = typer.prompt("  LINEAR_PROJECT_ID (UUID)")
-    elif project_id:
-        console.print(f"  [dim]Using existing project ID:[/dim] {project_id[:8]}…")
+        except Exception as exc:
+            console.print(f"  [red]✗ Could not fetch teams:[/red] {exc}")
+            raise typer.Exit(1)
+    elif team_id:
+        console.print(f"  [dim]Using existing team ID:[/dim] {team_id[:8]}…")
 
-    if not project_id:
-        console.print("  [red]✗ LINEAR_PROJECT_ID not set — aborting[/red]")
+    if not team_id:
+        console.print("  [red]✗ LINEAR_TEAM_ID not set — aborting[/red]")
         raise typer.Exit(1)
 
     try:
-        project = client.get_project(project_id)
-        if not project:
-            console.print(f"  [red]✗ Project not found: {project_id}[/red]")
+        team_obj = client.get_team(team_id)
+        if not team_obj:
+            console.print(f"  [red]✗ Team not found: {team_id}[/red]")
             raise typer.Exit(1)
-        console.print(f"  [green]✓[/green] Project: [bold]{project['name']}[/bold]")
-        env_values["LINEAR_PROJECT_ID"] = project_id
-
-        teams = project.get("teams", {}).get("nodes", [])
-        if not teams:
-            console.print("  [red]✗ No teams found on this project[/red]")
-            raise typer.Exit(1)
-        team = teams[0]
-        console.print(f"  [dim]Team: {team['name']}[/dim]")
+        console.print(f"  [green]✓[/green] Team: [bold]{team_obj['name']}[/bold]  [dim][{team_obj['key']}][/dim]")
+        env_values["LINEAR_TEAM_ID"] = team_id
+        # Remove legacy key if present
+        env_values.pop("LINEAR_PROJECT_ID", None)
+        team = team_obj
     except typer.Exit:
         raise
     except Exception as e:
-        console.print(f"  [red]✗ Could not load project:[/red] {e}")
+        console.print(f"  [red]✗ Could not load team:[/red] {e}")
         raise typer.Exit(1)
 
     # ── Step 3: Linear states and labels ─────────────────────────────────────
@@ -174,12 +192,12 @@ def setup(
     console.print("[bold]Step 3/4[/bold]  Linear workflow states")
     console.print("  [dim]Creating the workflow states Resonance needs (if they don't exist yet).[/dim]")
     console.print()
-    _ensure_states(client, team["id"])
+    _ensure_states(client, team_id)
 
     console.print()
     console.print("  [dim]Creating issue labels:[/dim]")
     console.print()
-    _ensure_labels(client, team["id"])
+    _ensure_labels(client, team_id)
 
     # ── Step 4: Optional credentials ─────────────────────────────────────────
     console.print()
@@ -330,16 +348,19 @@ def doctor():
     console.print("[bold]Credentials[/bold]")
 
     api_key = os.environ.get("LINEAR_API_KEY", "").strip()
-    project_id = os.environ.get("LINEAR_PROJECT_ID", "").strip()
+    team_id = (
+        os.environ.get("LINEAR_TEAM_ID", "").strip()
+        or os.environ.get("LINEAR_PROJECT_ID", "").strip()
+    )
 
     if not api_key:
         _fail("LINEAR_API_KEY", "not set — run: resonance setup")
         all_ok = False
-    if not project_id:
-        _fail("LINEAR_PROJECT_ID", "not set — run: resonance setup")
+    if not team_id:
+        _fail("LINEAR_TEAM_ID", "not set — run: resonance setup")
         all_ok = False
 
-    if not api_key or not project_id:
+    if not api_key or not team_id:
         console.print()
         if not all_ok:
             console.print("[red]✗ Issues found — run: resonance setup[/red]")
@@ -353,13 +374,11 @@ def doctor():
         viewer = client.get_viewer()
         _ok(f"LINEAR_API_KEY (authenticated as {viewer['name']})")
 
-        project = client.get_project(project_id)
-        if project:
-            _ok(f"LINEAR_PROJECT_ID ({project['name']})")
-            teams = project.get("teams", {}).get("nodes", [])
-            team_id = teams[0]["id"] if teams else None
+        team_obj = client.get_team(team_id)
+        if team_obj:
+            _ok(f"LINEAR_TEAM_ID ({team_obj['name']} [{team_obj['key']}])")
         else:
-            _fail("LINEAR_PROJECT_ID", f"project not found: {project_id}")
+            _fail("LINEAR_TEAM_ID", f"team not found: {team_id}")
             all_ok = False
             team_id = None
 
@@ -407,7 +426,7 @@ def doctor():
     console.print()
     if all_ok:
         console.print("[bold green]✓ All checks passed.[/bold green]")
-        console.print("  Ready to run: [bold]python -m orchestrator.main[/bold]")
+        console.print("  Ready to run: [bold]./onair.sh[/bold]")
     else:
         console.print("[bold red]✗ Some checks failed.[/bold red]")
         console.print("  Run [bold]resonance setup[/bold] to fix missing configuration.")

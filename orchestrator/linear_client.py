@@ -55,48 +55,43 @@ class LinearClient:
         data = self._query("query { viewer { id name email } }")
         return data["viewer"]
 
-    # ── Projects ──────────────────────────────────────────────────────────────
+    # ── Teams ─────────────────────────────────────────────────────────────────
 
-    def get_projects(self) -> list[dict]:
-        """List all projects the API key has access to."""
+    def get_teams(self) -> list[dict]:
+        """List all teams in the workspace."""
         data = self._query(
             """
             query {
-              projects(first: 50) {
-                nodes { id name identifier }
+              teams(first: 50) {
+                nodes { id name key }
               }
             }
             """
         )
-        return data["projects"]["nodes"]
+        return data["teams"]["nodes"]
 
-    def get_project(self, project_id: str) -> Optional[dict]:
-        """Get a project with its associated teams."""
+    def get_team(self, team_id: str) -> Optional[dict]:
+        """Get a team by UUID."""
         data = self._query(
             """
-            query Project($id: String!) {
-              project(id: $id) {
-                id
-                name
-                identifier
-                teams { nodes { id name } }
-              }
+            query Team($id: String!) {
+              team(id: $id) { id name key }
             }
             """,
-            {"id": project_id},
+            {"id": team_id},
         )
-        return data.get("project")
+        return data.get("team")
 
     # ── Issues ────────────────────────────────────────────────────────────────
 
-    def get_eligible_issues(self, project_id: str, state_name: str) -> list[dict]:
-        """Return all issues in the project that are in `state_name`."""
+    def get_eligible_issues(self, team_id: str, state_name: str) -> list[dict]:
+        """Return all issues in the team that are in `state_name`."""
         data = self._query(
             """
-            query EligibleIssues($projectId: String!, $stateName: String!) {
+            query EligibleIssues($teamId: String!, $stateName: String!) {
               issues(
                 filter: {
-                  project: { id: { eq: $projectId } }
+                  team: { id: { eq: $teamId } }
                   state: { name: { eq: $stateName } }
                 }
                 first: 50
@@ -115,7 +110,7 @@ class LinearClient:
               }
             }
             """,
-            {"projectId": project_id, "stateName": state_name},
+            {"teamId": team_id, "stateName": state_name},
         )
         return data["issues"]["nodes"]
 
