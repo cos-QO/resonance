@@ -57,6 +57,12 @@ def setup(
     """Configure credentials and create required Linear states and labels."""
     console.print(Panel.fit("[bold]Resonance Setup[/bold]", border_style="cyan"))
     console.print()
+    console.print("  You'll need:")
+    console.print("  [dim]1. A Linear API key   — takes 30 seconds to create[/dim]")
+    console.print("  [dim]2. A Linear project   — the project Resonance will watch[/dim]")
+    console.print("  [dim]3. Figma token        — optional, only for design tasks[/dim]")
+    console.print("  [dim]4. GitHub token       — optional, only for auto PR creation[/dim]")
+    console.print()
 
     env_path = Path(".env")
     env_values: dict[str, str] = {}
@@ -71,11 +77,22 @@ def setup(
 
     # ── Step 1: Linear API key ────────────────────────────────────────────────
     console.print("[bold]Step 1/4[/bold]  Linear API key")
+    console.print("  [dim]Where to get it:[/dim]")
+    console.print("    [dim]Linear → Settings → API → Personal API keys → Create key[/dim]")
+    console.print("    [dim]Direct URL: https://linear.app/settings/api[/dim]")
+    console.print("  [dim]Format: lin_api_...[/dim]")
+    console.print()
+
     api_key = os.environ.get("LINEAR_API_KEY") or env_values.get("LINEAR_API_KEY", "")
+    # Treat placeholder-only value as unset
+    if api_key == "lin_api_":
+        api_key = ""
 
     if not api_key and not non_interactive:
-        console.print("  Get yours at: [dim]Linear → Settings → API → Personal API keys[/dim]")
-        api_key = typer.prompt("  LINEAR_API_KEY", default=api_key or "")
+        api_key = typer.prompt("  LINEAR_API_KEY")
+    elif api_key:
+        masked = api_key[:12] + "…"
+        console.print(f"  [dim]Using existing key:[/dim] {masked}")
 
     if not api_key:
         console.print("  [red]✗ LINEAR_API_KEY not set — aborting[/red]")
@@ -95,23 +112,38 @@ def setup(
     # ── Step 2: Project ID ────────────────────────────────────────────────────
     console.print()
     console.print("[bold]Step 2/4[/bold]  Linear project")
+    console.print("  [dim]Resonance will watch this project for issues to work on.[/dim]")
+    console.print("  [dim]Fetching your projects…[/dim]")
+    console.print()
+
     project_id = os.environ.get("LINEAR_PROJECT_ID") or env_values.get("LINEAR_PROJECT_ID", "")
 
     if not project_id and not non_interactive:
         try:
             projects = client.get_projects()
             if projects:
-                console.print("  Available projects:")
-                for i, p in enumerate(projects[:15], 1):
-                    console.print(f"    {i:2d}. [cyan]{p['identifier']}[/cyan]  {p['name']}  [dim]{p['id']}[/dim]")
-                raw = typer.prompt("  Enter project ID (from list above or paste UUID)", default="")
-                # Accept index number or direct ID
+                for i, p in enumerate(projects[:20], 1):
+                    console.print(f"  [bold cyan]{i:2d}[/bold cyan]  {p['name']}")
+                    console.print(f"      [dim]{p['id']}[/dim]")
+                    console.print()
+                raw = typer.prompt("  Type a number to select a project")
                 if raw.isdigit() and 1 <= int(raw) <= len(projects):
                     project_id = projects[int(raw) - 1]["id"]
                 else:
                     project_id = raw.strip()
+            else:
+                console.print("  [yellow]No projects found on this account.[/yellow]")
+                console.print("  [dim]Create a project in Linear first, then re-run setup.[/dim]")
+                raise typer.Exit(1)
+        except typer.Exit:
+            raise
         except Exception:
-            project_id = typer.prompt("  LINEAR_PROJECT_ID")
+            console.print("  [dim]Could not fetch projects — paste your project UUID manually.[/dim]")
+            console.print("  [dim]Find it in Linear: open the project → copy the UUID from the URL[/dim]")
+            console.print("  [dim]URL format: linear.app/your-workspace/project/<UUID>/overview[/dim]")
+            project_id = typer.prompt("  LINEAR_PROJECT_ID (UUID)")
+    elif project_id:
+        console.print(f"  [dim]Using existing project ID:[/dim] {project_id[:8]}…")
 
     if not project_id:
         console.print("  [red]✗ LINEAR_PROJECT_ID not set — aborting[/red]")
@@ -130,7 +162,7 @@ def setup(
             console.print("  [red]✗ No teams found on this project[/red]")
             raise typer.Exit(1)
         team = teams[0]
-        console.print(f"  [dim]Team: {team['name']} ({team['id']})[/dim]")
+        console.print(f"  [dim]Team: {team['name']}[/dim]")
     except typer.Exit:
         raise
     except Exception as e:
@@ -140,10 +172,13 @@ def setup(
     # ── Step 3: Linear states and labels ─────────────────────────────────────
     console.print()
     console.print("[bold]Step 3/4[/bold]  Linear workflow states")
+    console.print("  [dim]Creating the workflow states Resonance needs (if they don't exist yet).[/dim]")
+    console.print()
     _ensure_states(client, team["id"])
 
     console.print()
-    console.print("[bold]Step 3b/4[/bold] Linear labels")
+    console.print("  [dim]Creating issue labels:[/dim]")
+    console.print()
     _ensure_labels(client, team["id"])
 
     # ── Step 4: Optional credentials ─────────────────────────────────────────
@@ -153,19 +188,30 @@ def setup(
     if not non_interactive:
         figma_key = os.environ.get("FIGMA_API_KEY") or env_values.get("FIGMA_API_KEY", "")
         if not figma_key:
-            console.print("  [dim]Figma API key — needed for design_to_code tasks[/dim]")
+            console.print("  [dim]Figma API key — only needed for design_to_code tasks (Figma → code).[/dim]")
+            console.print("  [dim]Where to get it: Figma → Settings → Account → Personal access tokens[/dim]")
+            console.print("  [dim]Direct URL: https://www.figma.com/settings[/dim]")
             figma_input = typer.prompt("  FIGMA_API_KEY (press Enter to skip)", default="")
             if figma_input.strip():
                 env_values["FIGMA_API_KEY"] = figma_input.strip()
+                console.print("  [green]✓[/green] FIGMA_API_KEY saved")
+            else:
+                console.print("  [dim]–[/dim] Skipped")
         else:
             console.print(f"  [green]✓[/green] FIGMA_API_KEY already set")
 
+        console.print()
         github_token = os.environ.get("GITHUB_TOKEN") or env_values.get("GITHUB_TOKEN", "")
         if not github_token:
-            console.print("  [dim]GitHub token — needed for PR creation (Milestone 3)[/dim]")
+            console.print("  [dim]GitHub token — only needed for automated PR creation (Milestone 3, not required now).[/dim]")
+            console.print("  [dim]Where to get it: GitHub → Settings → Developer settings → Personal access tokens[/dim]")
+            console.print("  [dim]Direct URL: https://github.com/settings/tokens — scopes needed: repo[/dim]")
             gh_input = typer.prompt("  GITHUB_TOKEN (press Enter to skip)", default="")
             if gh_input.strip():
                 env_values["GITHUB_TOKEN"] = gh_input.strip()
+                console.print("  [green]✓[/green] GITHUB_TOKEN saved")
+            else:
+                console.print("  [dim]–[/dim] Skipped")
         else:
             console.print(f"  [green]✓[/green] GITHUB_TOKEN already set")
     else:
@@ -185,8 +231,8 @@ def setup(
     console.print()
     console.print("[bold green]✓ Setup complete.[/bold green]")
     console.print()
-    console.print("Start the orchestrator:")
-    console.print("  [bold]python -m orchestrator.main[/bold]")
+    console.print("  Start the orchestrator:")
+    console.print("    [bold]./onair.sh[/bold]")
     console.print()
 
 
