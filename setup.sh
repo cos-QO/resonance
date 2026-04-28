@@ -70,17 +70,7 @@ get_env_key() {
 
 do_setup() {
   header "Resonance Setup"
-
-  if [[ -f .env ]]; then
-    warn ".env already exists."
-    dim "  → Run './setup.sh overwrite' to reconfigure from scratch"
-    dim "  → Run './setup.sh update'    to change a specific key"
-    echo ""
-    exit 0
-  fi
-
   ensure_resonance
-  cp .env.example .env
   resonance setup
 }
 
@@ -93,7 +83,6 @@ do_overwrite() {
 
   ensure_resonance
   rm -f .env
-  cp .env.example .env
   resonance setup
 }
 
