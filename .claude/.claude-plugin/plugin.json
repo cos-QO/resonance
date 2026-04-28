@@ -1,0 +1,11 @@
+{
+  "name": "cc-ready",
+  "description": "Multi-agent orchestration system: 15 agents, 32 skills, 7 rules, 12 hooks. Includes PM coordination, TDD iron laws, systematic debugging, brainstorm skill, plan-aware commits, and persistent agent memory.",
+  "version": "3.4.1",
+  "author": {
+    "name": "cos"
+  },
+  "homepage": "https://github.com/coswise/cc-ready",
+  "repository": "https://github.com/coswise/cc-ready",
+  "license": "MIT"
+}

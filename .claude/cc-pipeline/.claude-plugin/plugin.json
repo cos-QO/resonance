@@ -1,0 +1,10 @@
+{
+  "name": "cc-pipeline",
+  "description": "Agentic delivery pipeline module. PEP-driven workflow: Linear issue → context collection → plan approval → execution → report. Includes pd-pep skill, Linear + Figma MCP, guardrail rules, and /pd-* commands.",
+  "version": "0.1.0",
+  "author": {
+    "name": "queen-one"
+  },
+  "repository": "https://github.com/queen-one/cc-pipeline",
+  "license": "MIT"
+}

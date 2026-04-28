@@ -1,0 +1,168 @@
+{
+  "env": {
+    "SLASH_COMMAND_TOOL_CHAR_BUDGET": "40000"
+  },
+  "permissions": {
+    "allow": [
+      "mcp__filesystem__*",
+      "Agent:*",
+      "Read:*",
+      "Write:*",
+      "Edit:*",
+      "MultiEdit:*",
+      "Bash:*",
+      "WebSearch:*",
+      "WebFetch:*",
+      "Glob:*",
+      "Grep:*",
+      "LS:*",
+      "TodoWrite:*",
+      "NotebookEdit:*",
+      "mcp__*",
+      "mcp__chrome_devtools__*",
+      "mcp__context7__*",
+      "Read(.claude/**)",
+      "Write(.claude/memory/**)",
+      "Edit(.claude/memory/**)",
+      "MultiEdit(.claude/memory/**)",
+      "LS(.claude/**)",
+      "Glob(.claude/**)",
+      "Grep(.claude/**)"
+    ],
+    "deny": [
+      "Write(.claude/hooks/**)",
+      "Edit(.claude/hooks/**)",
+      "MultiEdit(.claude/hooks/**)",
+      "Write(.claude/settings.json)",
+      "Edit(.claude/settings.json)",
+      "MultiEdit(.claude/settings.json)",
+      "Write(.claude/agents/**)",
+      "Edit(.claude/agents/**)",
+      "MultiEdit(.claude/agents/**)",
+      "Write(.claude/skills/**)",
+      "Edit(.claude/skills/**)",
+      "MultiEdit(.claude/skills/**)",
+      "Write(.claude/rules/**)",
+      "Edit(.claude/rules/**)",
+      "MultiEdit(.claude/rules/**)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/session-context.py",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent:security|Agent:.*security.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/online-security-research.py PreToolUse Agent",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "TodoWrite",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/todo-sync.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/folder-structure-enforcer.py",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/execution-tracker.py",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "pm",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/validate-pm-output.py",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/execution-tracker.py",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Write|Edit|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/error-tracker.py",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "You are a workflow compliance verifier. After each response, check that the execution is on track.\n\n1. Read /.claude/memory/active/execution-tracker.json (if it exists)\n   - Are there phases marked in-progress that should be completed?\n   - Are handoff_files populated for completed phases?\n   - MANDATORY RULES CHECK:\n     a) Every developer phase MUST have a corresponding tester phase\n     b) Every plan MUST include a documenter phase\n     c) Tester phases SHOULD use /verify skill\n     d) If all phases are complete: verify tester ran, documenter ran, and /verify completed\n2. Check git status — uncommitted changes after a completed phase?\n3. Read the TODO file referenced in the tracker — do checkboxes match phase status?\n4. Check /.claude/memory/reports/verify/ — if implementation phases completed, did a verify report get generated?\n\nRespond {\"ok\": true} if workflow is compliant.\nRespond {\"ok\": false, \"reason\": \"...\"} if:\n- Testing was skipped (developer done, no tester)\n- Documentation missing (plan complete, no documenter)\n- Verify never ran (tester assigned but no verify report)\n- Phases stuck in-progress\n\nBe lenient on minor issues. Only flag real workflow violations. If no tracker exists, respond ok.",
+            "model": "haiku",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && while [ ! -d .claude ] && [ \"$(pwd)\" != \"/\" ]; do cd ..; done && python3 .claude/hooks/unified-context-processor.py checkpoint",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

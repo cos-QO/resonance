@@ -1,0 +1,147 @@
+# Dependencies
+node_modules/
+*.pnp
+.pnp.js
+
+# Production builds
+dist/
+build/
+out/
+
+# Environment variables — credentials live here, never commit
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Resonance runtime directories
+runs/logs/
+runs/state.json
+runs/events.jsonl
+runs/commands.jsonl
+workspaces/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# Testing
+.nyc_output
+
+# Claude Code Ecosystem
+/.claude/temp/
+/.claude/artifacts/debug/
+/.claude/cleanup/scheduled/
+/.claude/memory/todos/*.json
+/.claude/hooks/*.lock
+/.claude/hooks/__pycache__/
+/.claude/scripts/__pycache__/
+/.claude/**/*.pyc
+/.claude/**/*.pyo
+/.claude/**/*.pyd
+/.claude/**/.DS_Store
+
+# Claude project-specific memory (not useful for others cloning this repo)
+.claude/memory/active/
+.claude/memory/compound/
+.claude/memory/discovery/
+.claude/memory/handoffs/
+.claude/memory/plans/
+.claude/memory/procedures/
+.claude/memory/project/
+.claude/memory/reports/
+.claude/memory/session_checkpoints/
+.claude/memory/telemetry/
+.claude/memory/todos/
+.claude/memory/watchdog/
+.claude/memory/git-commits.md
+# (standards/ and templates/ are kept — reusable across projects)
+.claude/agent-memory/
+
+# Claude-related files (for projects using Claude Code)
+# NOTE: These are commented out because THIS IS the Claude Code repo itself
+# AGENT.md
+# *.claude
+# *.claude.md
+# *-claude.md
+
+# MCP servers
+.*-mcp/
+.playwright-mcp/
+.mcp.json
+mcp-config.json
+
+# Cursor/Other AI tools
+.cursorrules
+.cursor/
+.codeium/
+.continue/
+.aider/
+.crush/
+.github/copilot/
+.windsurf/
+
+# Python build artifacts
+*.egg-info/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+.hypothesis/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+tmp/
+temp/
+
+# Test files (cleanup)
+index.html
+styles.css
+test-landing.html
+
+# Archive directories
+archive-*/
