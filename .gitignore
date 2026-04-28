@@ -17,37 +17,12 @@ __pycache__/
 venv/
 env/
 
-# ── Claude Code — local config & project-specific memory ─────────────────────
-# MCP config has local paths — each user has their own
+# ── Claude Code — personal developer setup, not part of the project ──────────
+# .claude/ is the local Claude Code multi-agent config (agents, skills, hooks).
+# .mcp.json configures local MCP servers with machine-specific paths.
+# Both belong to the developer's environment, not the repo.
+.claude/
 .mcp.json
-
-# Project memory is session-specific; standards/ and templates/ are committed
-.claude/memory/active/
-.claude/memory/compound/
-.claude/memory/discovery/
-.claude/memory/handoffs/
-.claude/memory/plans/
-.claude/memory/procedures/
-.claude/memory/project/
-.claude/memory/reports/
-.claude/memory/session_checkpoints/
-.claude/memory/telemetry/
-.claude/memory/todos/
-.claude/memory/watchdog/
-.claude/memory/git-commits.md
-
-# Agent memory is personal to each developer's session
-.claude/agent-memory/
-
-# Lock files and temp dirs created during sessions
-.claude/hooks/*.lock
-.claude/temp/
-.claude/memory/temp/
-
-# Hook and script bytecode
-.claude/**/__pycache__/
-.claude/**/*.pyc
-.claude/**/*.pyo
 
 # ── OS & editor ───────────────────────────────────────────────────────────────
 .DS_Store
