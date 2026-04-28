@@ -91,12 +91,23 @@ echo ""
 PYTHON=""
 for cmd in python3.13 python3.12 python3.11 python3 python; do
   if command -v "$cmd" &>/dev/null; then
-    PYTHON="$cmd"; break
+    # Require 3.11+ — skip older interpreters
+    ver=$("$cmd" -c "import sys; print(sys.version_info >= (3,11))" 2>/dev/null)
+    if [[ "$ver" == "True" ]]; then
+      PYTHON="$cmd"; break
+    fi
   fi
 done
 if [[ -z "$PYTHON" ]]; then
-  fail "No Python interpreter found. Install Python 3.11+."
+  fail "Python 3.11+ not found. Install via: brew install python@3.11"
   exit 1
+fi
+ok "Using $PYTHON ($($PYTHON --version))"
+
+# Verify dependencies are installed for this interpreter; install if not
+if ! "$PYTHON" -c "import yaml, httpx, typer, rich" 2>/dev/null; then
+  info "Installing dependencies for $PYTHON..."
+  "$PYTHON" -m pip install -e . -q
 fi
 
 cleanup() {
