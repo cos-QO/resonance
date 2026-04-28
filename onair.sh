@@ -82,11 +82,22 @@ echo ""
 #   }
 #   trap cleanup INT TERM EXIT
 #
-#   python -m orchestrator.main &
+#   "$PYTHON" -m orchestrator.main &
 #   ORCHESTRATOR_PID=$!
-#   python -m tui.app          # foreground — blocks until user quits
+#   "$PYTHON" -m tui.app       # foreground — blocks until user quits
 #
 # Until then the orchestrator runs in the foreground.
+
+PYTHON=""
+for cmd in python3.13 python3.12 python3.11 python3 python; do
+  if command -v "$cmd" &>/dev/null; then
+    PYTHON="$cmd"; break
+  fi
+done
+if [[ -z "$PYTHON" ]]; then
+  fail "No Python interpreter found. Install Python 3.11+."
+  exit 1
+fi
 
 cleanup() {
   echo ""
@@ -95,4 +106,4 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-python -m orchestrator.main
+"$PYTHON" -m orchestrator.main
