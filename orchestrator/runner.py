@@ -51,6 +51,7 @@ class Runner:
         self._last_output_at: float = time.monotonic()
         self._stdout_thread: Optional[threading.Thread] = None
         self._done = threading.Event()
+        self._output_tail: list[str] = []  # last 30 lines for error diagnosis
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -95,12 +96,17 @@ class Runner:
             signal=self._last_signal,
             artifacts=self._artifacts,
         )
+        error = None
+        if exit_code != 0:
+            error = _extract_error(self._output_tail) or f"exit code {exit_code}"
+            write_event(self._issue_id, "run_error_detail", error=error)
+
         return RunResult(
             issue_id=self._issue_id,
             exit_code=exit_code,
             signal=self._last_signal,
             artifacts=self._artifacts,
-            error=None if exit_code == 0 else f"exit code {exit_code}",
+            error=error,
         )
 
     def is_stalled(self, stall_seconds: int) -> bool:
@@ -115,7 +121,6 @@ class Runner:
     # ── Internals ─────────────────────────────────────────────────────────────
 
     def _build_command(self, iteration: int) -> list[str]:
-        cfg = self._config.workflow["worker"]
         issue_id = self._issue_id
         session_name = f"agent-{issue_id}-iter{iteration}"
 
@@ -128,12 +133,14 @@ class Runner:
             "--name", session_name,
         ]
 
-        # Plugin dirs from workspace agent_config
+        # Resolve plugin dirs and mcp-config to absolute paths from repo root.
+        # WORKFLOW.md stores repo-root-relative paths; the command runs inside the
+        # worktree, so relative paths would resolve against the wrong directory.
+        repo_root = Path.cwd().resolve()
         agent_cfg = self._config.workflow["workspace"]["agent_config"]
         for plugin_dir in agent_cfg["plugin_dirs"]:
-            cmd += ["--plugin-dir", plugin_dir]
-
-        cmd += ["--mcp-config", agent_cfg["mcp_config"]]
+            cmd += ["--plugin-dir", str(repo_root / plugin_dir)]
+        cmd += ["--mcp-config", str(repo_root / agent_cfg["mcp_config"])]
         return cmd
 
     def _consume_stdout(self) -> None:
@@ -152,6 +159,11 @@ class Runner:
     def _process_line(self, line: str) -> None:
         if not line:
             return
+
+        # Maintain rolling tail for error diagnosis
+        self._output_tail.append(line)
+        if len(self._output_tail) > 30:
+            self._output_tail.pop(0)
 
         # Try stream-json parse first
         try:
@@ -214,13 +226,43 @@ class Runner:
                 status="waiting_human",
                 artifacts=self._artifacts,
             )
-
         elif sig_type == "human_input_needed":
             run_state.update_run(
                 self._issue_id,
                 status="needs_input",
                 pending_question=signal.get("question"),
             )
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _extract_error(tail: list) -> Optional[str]:
+    """
+    Distil a human-readable error from the last lines of agent output.
+    Priority: lines containing 'error' keyword → last 3 plain-text lines.
+    Returns None if the tail is empty.
+    """
+    if not tail:
+        return None
+
+    # Prefer explicit error lines (strip stream-json wrapper if present)
+    error_lines = []
+    for raw in tail:
+        text = raw
+        try:
+            ev = json.loads(raw)
+            text = ev.get("text") or ev.get("content") or ev.get("error") or raw
+        except Exception:
+            pass
+        if re.search(r"\berror\b", str(text), re.I):
+            error_lines.append(str(text).strip())
+
+    if error_lines:
+        return " | ".join(error_lines[-3:])[:400]
+
+    # Fallback: last 3 non-empty lines
+    plain = [l.strip() for l in tail if l.strip()][-3:]
+    return " | ".join(plain)[:400] if plain else None
 
 
 def build_prompt(

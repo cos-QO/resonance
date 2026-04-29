@@ -1237,6 +1237,96 @@ def attach(issue_id: str = typer.Argument(..., help="Issue identifier e.g. QO-12
     console.print(f"[dim]tail -f {log_file}[/dim]\n")
 
 
+# ── debug ──────────────────────────────────────────────────────────────────────
+
+@app.command()
+def debug(issue_id: str = typer.Argument(..., help="Issue identifier e.g. RND-32")):
+    """Show full diagnostic info for a run: command, settings, recent log output."""
+    import glob
+
+    run = run_state.get_run(issue_id)
+    if not run:
+        console.print(f"[red]No run found for {issue_id}[/red]")
+        raise typer.Exit(1)
+
+    worktree  = run.get("worktree", "")
+    log_file  = run.get("log_file", "")
+    status    = run.get("status", "?")
+    error     = run.get("error", "")
+    attempt   = run.get("attempt", 1)
+
+    console.print(f"\n[bold]── Run: {issue_id} ──────────────────────────────[/bold]")
+    console.print(f"  Status:    [bold]{status}[/bold]")
+    console.print(f"  Attempts:  {attempt}")
+    if error:
+        console.print(f"  Error:     [red]{error}[/red]")
+    console.print(f"  Worktree:  {worktree}")
+
+    # Settings.json
+    settings_path = Path(worktree) / ".claude" / "settings.json" if worktree else None
+    if settings_path and settings_path.exists():
+        console.print(f"\n[bold]── .claude/settings.json ─────────────────────[/bold]")
+        try:
+            import json as _json
+            settings = _json.loads(settings_path.read_text())
+            console.print(f"  pluginDirs: {settings.get('pluginDirs', [])}")
+            console.print(f"  mcpConfig:  {settings.get('mcpConfig', '(not set)')}")
+        except Exception as e:
+            console.print(f"  [red]Could not read: {e}[/red]")
+
+    # Recent log output
+    log_candidates = sorted(glob.glob(f"runs/logs/{issue_id}-*.log"), reverse=True)
+    log_to_show = log_file if log_file and Path(log_file).exists() else (log_candidates[0] if log_candidates else None)
+    if log_to_show:
+        console.print(f"\n[bold]── Last 60 lines of log: {log_to_show} ──────[/bold]")
+        try:
+            lines = Path(log_to_show).read_text(errors="replace").splitlines()
+            for ln in lines[-60:]:
+                color = "red" if re.search(r"\berror\b", ln, re.I) else "dim"
+                console.print(f"  [{color}]{ln}[/{color}]")
+        except Exception as e:
+            console.print(f"  [red]Could not read log: {e}[/red]")
+    else:
+        console.print(f"\n  [dim]No log file found for {issue_id}[/dim]")
+
+    # Recent events from events.jsonl
+    events_path = Path("runs/events.jsonl")
+    if events_path.exists():
+        console.print(f"\n[bold]── Last 20 events ─────────────────────────[/bold]")
+        try:
+            all_events = [
+                json.loads(ln) for ln in events_path.read_text().splitlines()
+                if ln.strip()
+                if json.loads(ln).get("issue_id") == issue_id
+            ]
+            for ev in all_events[-20:]:
+                ts   = ev.get("ts", "")[-8:]
+                kind = ev.get("event", ev.get("type", "?"))
+                data = {k: v for k, v in ev.items() if k not in ("ts", "issue_id", "event", "type")}
+                data_str = "  ".join(f"{k}={v}" for k, v in data.items())
+                color = "red" if "error" in kind or "fail" in kind else "cyan" if "complete" in kind else ""
+                prefix = f"[{color}]" if color else ""
+                suffix = f"[/{color}]" if color else ""
+                console.print(f"  {ts}  {prefix}{kind:<22}{suffix}  [dim]{data_str[:120]}[/dim]")
+        except Exception as e:
+            console.print(f"  [red]Could not read events: {e}[/red]")
+
+    # Orchestrator log tail
+    orch_log = Path("runs/orchestrator.log")
+    if orch_log.exists():
+        console.print(f"\n[bold]── Orchestrator log (last 20 lines) ───────[/bold]")
+        try:
+            lines = orch_log.read_text(errors="replace").splitlines()
+            issue_lines = [l for l in lines if issue_id in l][-20:]
+            for ln in issue_lines:
+                color = "red" if re.search(r"\berror\b|\bexception\b", ln, re.I) else "dim"
+                console.print(f"  [{color}]{ln}[/{color}]")
+        except Exception as e:
+            console.print(f"  [red]Could not read orchestrator log: {e}[/red]")
+
+    console.print()
+
+
 # ── checkpoint ─────────────────────────────────────────────────────────────────
 
 @app.command()

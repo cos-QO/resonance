@@ -116,48 +116,115 @@ class _FeedbackScreen(ModalScreen):
             self.query_one("#_fb_issue", Input).focus()
 
 
-_DEMO_ISSUE_TITLE = "Demo: Resonance Pipeline — Hello World"
+_DEMO_ISSUE_TITLE = "[PEP] QO Brand Page — Resonance Live"
 
 _DEMO_ISSUE_DESCRIPTION = """\
-# Demo Plan: Hello World Button Component
+# PEP: QO Brand Page — Resonance Live
 
-A demonstration of the full Resonance pipeline — from plan approval through execution
-to human review.
+```
+id:      pep-resonance-live-demo
+status:  draft
+owner:   Resonance Demo
+created: 2026-04-29
+```
 
-## Overview
-Build a self-contained, styled Hello World HTML page to verify the pipeline end-to-end.
-No existing code is touched. Completely isolated.
+---
 
-## Phases
+## 🤖 Agent Handoff
 
-### Phase 1: Scaffold
-Create the `demo/` directory and the base `demo/hello-world.html` file with correct
-HTML5 structure, title, and a "Hello from Resonance" heading.
+**Task:** Build a standalone QO-branded status page that demonstrates pipeline output quality and visual consistency with ConnectUI.
 
-### Phase 2: Styling
-Add inline CSS: dark terminal-inspired colour scheme, styled CTA button with a visible
-hover state. Everything embedded — no external stylesheets or frameworks.
+**Collect before planning:**
 
-### Phase 3: Verification & Commit
-Verify the file renders correctly (open in browser if possible), commit with message:
-`demo: add hello-world button component`
+| Sub-agent | Mission | Resolves |
+| -- | -- | -- |
+| Codebase | Read `.claude/memory/standards/connectui-design-system.md` for exact token values | Token accuracy |
 
-## Acceptance Criteria
-- [ ] `demo/hello-world.html` exists at the repository root
-- [ ] Page shows "Hello from Resonance" heading
-- [ ] Styled button with hover state
-- [ ] All CSS inline, no JavaScript, no external dependencies
-- [ ] File committed to the repo
+> Skip Figma and Linear sub-agents — scope is fully defined here.
 
-## Notes
-- Vanilla HTML + CSS only — no build step, no npm, no frameworks
-- Dark background, bright accent colour scheme
-- Single self-contained `.html` file
+**Gate:** Do not write code until plan is posted to Linear and status = **Plan Approved**.
+
+**Output:** `demo/resonance-live.html` committed to repo + `file://` preview URL
+
+---
+
+# Tier 1 — Always Required
+
+## What
+
+Build `demo/resonance-live.html` — a self-contained QO-branded status page using exact ConnectUI design tokens.
+
+## Why
+
+Show that Resonance agents produce visually consistent, on-brand output without manual QA, validating both pipeline efficiency and design system adherence.
+
+## Done When
+
+- [ ] `demo/resonance-live.html` exists and opens cleanly at a `file://` path
+- [ ] Page background is exactly `#0D0C0E` (onyx[900])
+- [ ] Primary accent is exactly `#7700EE` (violet[400])
+- [ ] "Resonance" wordmark uses Cabinet Grotesk, weight 700 (Google Fonts CDN)
+- [ ] Body text uses Poppins (Google Fonts CDN)
+- [ ] CTA button has `border-radius: 200px` (buttonCorner token)
+- [ ] Status pill present — violet[400] background, white text, pill shape
+- [ ] File committed: `demo: add QO brand status page (Resonance Live)`
+
+## Not Doing
+
+* No React, npm, or build step — single `.html` file only
+* No external CSS frameworks or JavaScript
+* Not integrating with a live API
+
+---
+
+## Plans
+
+### Plan 1 — Build QO Brand Status Page
+**Goal:** Produce `demo/resonance-live.html` with pixel-accurate ConnectUI tokens
+**Domain:** frontend
+**Depends on:** none
+
+**Blocks:**
+- B1: Scaffold HTML + head (Google Fonts CDN links, meta, title, CSS custom properties from ConnectUI tokens)
+- B2: Build all UI elements — wordmark, tagline, status pill, feature row (3 items), CTA button
+- B3: Verify renders correctly, commit, signal ready_for_review with file:// preview URL
+
+---
+
+# + Frontend
+
+* ConnectUI components: none (standalone HTML — tokens as CSS custom properties)
+* Figma link: N/A
+* Token set (apply exactly — no approximations):
+  ```
+  Background:    onyx[900]    #0D0C0E
+  Surface/card:  onyx[800]    #1A1820
+  Primary:       violet[400]  #7700EE
+  Primary hover: violet[300]  #9933F0
+  Text primary:  onyx[50]     #FFFFFF
+  Text secondary:onyx[300]    #999999
+  Border:        onyx[600]    #3D3940
+
+  buttonCorner:  border-radius: 200px   (pills, CTA button)
+  shape md:      border-radius: 8px     (cards, badges)
+
+  Font display:  Cabinet Grotesk  (Google Fonts, weights 400 700)
+  Font body:     Poppins           (Google Fonts, weights 300 400 600)
+
+  Spacing base 4px:  spacing(3)=8px  spacing(5)=16px  spacing(7)=24px  spacing(9)=40px
+  ```
+* UI elements required:
+  - Wordmark "Resonance" — Cabinet Grotesk 700, ~52px
+  - Tagline "Supervised agentic delivery · Queen One" — Poppins 300
+  - Status pill "● Pipeline Live" — violet[400] bg, white text, border-radius 200px
+  - Feature row (flex, 3 items): "Linear-native" / "Worktree isolation" / "Human gates"
+  - CTA button "Open Dashboard →" — violet[400] fill, white text, border-radius 200px, 48px height
+* Responsive breakpoints: desktop-only (no mobile needed for demo)
 """
 
 
 class _DemoScreen(ModalScreen):
-    """Guided end-to-end demo: creates a plan issue in Todo for user to approve."""
+    """Guided end-to-end demo: creates a PEP issue in Todo for user to review and approve."""
 
     BINDINGS = [Binding("escape", "dismiss", "Cancel", priority=True)]
 
@@ -180,14 +247,14 @@ class _DemoScreen(ModalScreen):
     _INTRO = """\
 [bold]What this demo does:[/bold]
 
-  [dim]1.[/dim]  Creates a [bold cyan]plan[/bold cyan] issue in [bold white]Todo[/bold white] — open in Linear to review it
+  [dim]1.[/dim]  Creates a [bold cyan]PEP[/bold cyan] issue in [bold white]Todo[/bold white] — open in Linear to review it
   [dim]2.[/dim]  Move the issue to [bold bright_green]Plan Approved[/bold bright_green] to kick off the pipeline
-  [dim]3.[/dim]  The orchestrator runs the [bold cyan]Planning Agent[/bold cyan] to decompose into phases
-  [dim]4.[/dim]  Phase issues execute automatically (each becomes its own run)
-  [dim]5.[/dim]  Each phase moves to [bold magenta]Human Review[/bold magenta] when done — you close the loop
+  [dim]3.[/dim]  The orchestrator runs the [bold cyan]PEP Reader Agent[/bold cyan] → creates Plan issues
+  [dim]4.[/dim]  Approve each Plan → Execution Agents build the work
+  [dim]5.[/dim]  Each block moves to [bold magenta]Human Review[/bold magenta] when done — you close the loop
 
-[bold]The plan:[/bold]  build [bold white]demo/hello-world.html[/bold white] — a styled button page
-[dim]        3 phases: Scaffold → Styling → Verify & Commit[/dim]
+[bold]The PEP:[/bold]  build [bold white]demo/resonance-live.html[/bold white] — QO brand status page
+[dim]        exact ConnectUI tokens: violet[400] #7700EE, Cabinet Grotesk, border-radius 200px[/dim]
 
 [bold]Requirements:[/bold]
   [dim]·[/dim]  Orchestrator running  [dim](● orch must be green in the header)[/dim]
@@ -387,14 +454,14 @@ class _DemoScreen(ModalScreen):
                 )
                 return
 
-            # Create plan issue in Todo — user must move to Plan Approved to kick off
+            # Create PEP issue in Todo — user reviews, then moves to Plan Approved
             issue = client.create_issue(
                 team_id=cfg.linear_team_id,
                 title=_DEMO_ISSUE_TITLE,
                 description=_DEMO_ISSUE_DESCRIPTION,
                 project_id=cfg.linear_project_id,
                 state_name="Todo",
-                label_names=["plan", "RES"],
+                label_names=["pep", "RES"],
                 priority=2,
             )
             client.close()
@@ -409,7 +476,7 @@ class _DemoScreen(ModalScreen):
             # Surface the most actionable part of the error
             if "label" in err.lower() and "not found" in err.lower():
                 msg = (
-                    "Labels 'plan' or 'RES' not found in Linear.\n\n"
+                    "Labels 'pep' or 'RES' not found in Linear.\n\n"
                     "  Run [bold]./onair.sh[/bold] and let it auto-fix labels, then retry."
                 )
             elif "state" in err.lower() or "todo" in err.lower():
@@ -826,15 +893,15 @@ def _help_content() -> str:
 
   [bold white]d[/bold white]    Launch the full pipeline walkthrough
 
-  Creates a [bold cyan]plan[/bold cyan] issue in [bold white]Todo[/bold white] in your active project — labelled [bold cyan]plan[/bold cyan] + [bold yellow]RES[/bold yellow].
+  Creates a [bold cyan]PEP[/bold cyan] issue in [bold white]Todo[/bold white] in your active project — labelled [bold cyan]pep[/bold cyan] + [bold yellow]RES[/bold yellow].
   You review it in Linear, then move it to [bold bright_green]Plan Approved[/bold bright_green] to kick off.
 
   [dim]What happens next:[/dim]
-  [dim]  1.  Planning Agent decomposes the plan into phase issues[/dim]
-  [dim]  2.  Phase issues run automatically (one worktree each)[/dim]
-  [dim]  3.  Each phase moves to Human Review when complete[/dim]
+  [dim]  1.  PEP Reader Agent decomposes into Plan issues (Todo, for review)[/dim]
+  [dim]  2.  Approve each Plan → Execution Agents build in isolated worktrees[/dim]
+  [dim]  3.  Each block moves to Human Review when complete[/dim]
 
-  [dim]The plan:[/dim]  build [bold white]demo/hello-world.html[/bold white] — 3 phases: Scaffold → Style → Commit
+  [dim]The PEP:[/dim]  build [bold white]demo/resonance-live.html[/bold white] — QO brand page, exact ConnectUI tokens
 
   [dim]Requirements:[/dim]
   [dim]  ·  Orchestrator running     (● orch green in the header)[/dim]
@@ -920,6 +987,9 @@ _PIPELINE_ORDER = [
     "agent feedback needed",
     "human review",
     "plan approved",
+    "plan proposed",
+    "ready for planning",
+    "todo",
 ]
 
 _GLYPH_COLOR: dict[str, str] = {
@@ -1107,6 +1177,11 @@ def _archive_session(prev_project_id: str) -> str | None:
     ]
 
     archive_path.write_text("\n".join(lines) + "\n")
+
+    # Wipe runtime files so the new project starts with a clean slate.
+    state_path.write_text("{}\n")
+    events_path.write_text("")
+
     return str(archive_path)
 
 
@@ -1589,6 +1664,9 @@ class _LinearPoller:
             cfg    = load_config()
             client = LinearClient(cfg.linear_api_key)
             states = [
+                "Todo",
+                "Ready for Planning",
+                "Plan Proposed",
                 cfg.state_eligibility,
                 cfg.state_in_progress,
                 cfg.state_feedback,
@@ -2008,13 +2086,13 @@ class ResonanceDashboard(App):
 
             project_id, project_name = result
 
-            # Archive current session before switching
+            # Archive current session if switching to a different project
             from orchestrator.config import load_config
             try:
                 prev_cfg = load_config()
                 prev_id  = prev_cfg.linear_project_id
                 if prev_id and prev_id != project_id:
-                    archive_path = _archive_session(prev_id)
+                    archive_path = _archive_session(prev_id)  # wipes files internally
                     if archive_path:
                         self.call_from_thread(
                             self.notify,
@@ -2024,6 +2102,12 @@ class ResonanceDashboard(App):
                         )
             except Exception:
                 pass
+
+            # Always wipe runtime files when setting a project so stale runs
+            # from a previous session (or the same project) don't bleed through.
+            for _p in (Path("runs/state.json"), Path("runs/events.jsonl")):
+                if _p.exists():
+                    _p.write_text("{}\n" if _p.suffix == ".json" else "")
 
             env_path = Path(".env")
             text  = env_path.read_text() if env_path.exists() else ""
@@ -2041,6 +2125,7 @@ class ResonanceDashboard(App):
                 self.notify, f"Project set: {project_name}", severity="information"
             )
             self._linear._fetch()
+            self.call_from_thread(self._tick)
 
         except Exception as exc:
             self.call_from_thread(

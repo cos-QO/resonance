@@ -5,16 +5,28 @@ Usage: python -m orchestrator.main
 import logging
 import signal
 import sys
-import threading
+from pathlib import Path
 
 from .config import load_config
 from .poller import Poller
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s %(name)s %(message)s",
-    datefmt="%H:%M:%S",
-)
+_LOG_DIR = Path("runs")
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Console handler — INFO and above
+_console = logging.StreamHandler(sys.stderr)
+_console.setLevel(logging.INFO)
+_console.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s %(message)s", "%H:%M:%S"))
+
+# File handler — DEBUG and above (persistent dev log)
+_file = logging.FileHandler(_LOG_DIR / "orchestrator.log", encoding="utf-8")
+_file.setLevel(logging.DEBUG)
+_file.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s %(message)s", "%Y-%m-%dT%H:%M:%S"))
+
+logging.root.setLevel(logging.DEBUG)
+logging.root.addHandler(_console)
+logging.root.addHandler(_file)
+
 logger = logging.getLogger(__name__)
 
 

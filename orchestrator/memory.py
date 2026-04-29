@@ -18,7 +18,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 MEMORY_ROOT = Path("runs/memory")
 _lock = threading.Lock()
@@ -204,10 +204,10 @@ def write_resonance_checkpoint(
     branch: str,
     by: str,
     status: str,
-    progress_lines: list[str] | None = None,
+    progress_lines: Optional[List[str]] = None,
     whats_left: str = "",
     decisions: str = "",
-) -> Path | None:
+) -> Optional[Path]:
     """Write RESONANCE.md to the worktree root.
 
     Called on pause, Human Review transition, and via `resonance checkpoint`.
