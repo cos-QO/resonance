@@ -1,207 +1,133 @@
 # Resonance
 
-Resonance is a supervised agentic delivery orchestrator. It polls a Linear team for issues in "Plan Approved" state, launches Claude Code agents in isolated git worktrees, monitors their output for structured signals, and keeps humans in control at every decision point. The human approves work before it starts and again before anything merges.
+Resonance is a supervised agentic delivery pipeline. It polls a Linear team for issues in "Plan Approved" state, launches Claude Code agents in isolated git worktrees, monitors their output for structured signals, and keeps humans in control at two mandatory gates: plan approval and PR review. The orchestrator manages state transitions in Linear, retries on failure, and surfaces everything in a Textual TUI dashboard.
 
 ---
 
 ## How it works
 
-The full loop from Linear ticket to reviewed output:
+1. Create a Linear issue with a clear title and description. Apply a label that tells Resonance what kind of work it is (`frontend`, `bug`+`frontend`, `design`, `backend`, or `bug`+`backend`). For multi-phase work, create a `plan`-labelled issue and let the Planning Agent decompose it.
 
-1. You create a Linear issue and apply a label that tells Resonance what kind of work it is (`frontend`, `bug` + `frontend`, or `design`).
-2. You (or a teammate) reviews the issue, confirms there is enough context for an agent to act on it, and moves it to **Plan Approved** in the Linear board.
-3. Resonance polls your Linear team every 60 seconds. When it finds an issue in Plan Approved, it re-verifies the state hasn't changed (fail-closed), then creates an isolated git worktree at `workspaces/RND-123/`, builds a prompt from the issue title, description, and label, and launches `claude -p "<prompt>" --output-format stream-json`.
-4. The agent works inside the worktree. When it needs a human decision, it emits a structured signal to stdout:
+2. Move the issue to **Plan Approved** in Linear. This is your explicit authorization — the orchestrator will not touch issues in any other state.
+
+3. Within 15 seconds, the orchestrator picks up the issue. It re-fetches it from Linear to confirm the state is still Plan Approved (fail-closed), creates a git worktree at `workspaces/<issue-id>/` on branch `agent/<issue-id>`, writes a `.claude/settings.json` pointing at shared plugin directories, and launches `claude -p "<prompt>" --output-format stream-json --permission-mode bypassPermissions`. Linear moves to **In Progress** and the `RES` label is added.
+
+4. The agent works inside the worktree. If it needs a human decision, it writes to stdout:
    ```
    AGENT_SIGNAL: {"type": "human_input_needed", "question": "...", "context": "..."}
    ```
-   Resonance detects this, moves the Linear issue to **Agent Feedback Needed**, and pauses the run. You respond with `resonance approve RND-123` or `resonance feedback RND-123 "..."`.
-5. When the agent finishes, it emits:
+   Resonance detects this, moves the Linear issue to **Agent Feedback Needed**, and pauses the run. Add a comment in Linear with your answer and move the issue back to Agent Feedback Needed — the orchestrator detects the state change, extracts new comments, and resumes with a new iteration.
+
+5. When the agent finishes, it writes:
    ```
    AGENT_SIGNAL: {"type": "ready_for_review", "summary": "...", "artifacts": {"preview_url": "..."}}
    ```
    Resonance moves the issue to **Human Review** and posts a comment with the summary and preview URL.
-6. You open the PR, review the code, and merge — or send feedback with `resonance feedback` to trigger another iteration.
 
-**Human gates are mandatory:** work cannot begin without Plan Approved, and nothing merges without your PR review.
-
-**Labels control task type:**
-
-| Label(s) | Task type |
-|---|---|
-| `frontend` | frontend_feature |
-| `frontend` + `bug` | frontend_bug |
-| `design` | design_to_code (requires FIGMA_API_KEY) |
-
-Issues with no recognized label are rejected: Resonance posts a comment explaining what labels are supported, then returns the issue to Todo.
+6. Review the branch (`workspaces/<issue-id>/`, branch `agent/<issue-id>`). Merge when satisfied, or add feedback in Linear and move to Agent Feedback Needed to trigger another iteration. When done, move the issue to **Done** — the orchestrator detects this on its next reconciliation cycle and cleans up the worktree.
 
 ---
 
 ## Quick start
 
-Prerequisites: Python 3.11+, Git, [Claude Code CLI](https://claude.ai/code) (`claude auth login`)
+Prerequisites: Python 3.11+, Git 2.5+, [Claude Code CLI](https://claude.ai/code) (`claude auth login`)
 
 ```bash
-# 1. Clone
 git clone https://github.com/cos-QO/resonance && cd resonance
-
-# 2. Run setup (installs resonance via pip install -e . automatically)
-./setup.sh
-
-# 3. Health check
-resonance doctor
-
-# 4. Start the orchestrator
-./onair.sh
+./setup.sh          # guided wizard: credentials + Linear states/labels
+resonance doctor    # verify everything is wired correctly
+./onair.sh          # start orchestrator + TUI dashboard
 ```
 
-`./setup.sh` installs the `resonance` CLI via `pip install -e .` before running the interactive wizard. It collects your Linear API key, lists your teams so you can pick one, creates the required workflow states and labels in Linear, and writes a `.env` file.
+`./onair.sh` runs pre-flight checks, activates the virtual environment, runs `resonance doctor` (and `resonance fix` if it finds fixable issues), prompts for a Linear project scope if none is set, starts the orchestrator in the background, and opens the Textual TUI. Closing the TUI also stops the orchestrator.
 
-To update a single credential later: `./setup.sh update`  
-To start over: `./setup.sh overwrite`  
-To remove credentials and clear runtime state: `./setup.sh wipe`
+To update a single credential: `./setup.sh update`
+To remove credentials and runtime state: `./setup.sh wipe`
 
 ---
 
-## Setting up your Linear board
+## Key concepts
 
-`resonance setup` creates four workflow states in your Linear team automatically:
+### Workflow states
 
-| State | Role |
+| Linear state | Who sets it | What it means |
+|---|---|---|
+| Todo | You / orchestrator on failure | Not ready, or returned after max retries |
+| Plan Approved | You | Authorized — orchestrator will pick this up |
+| In Progress | Orchestrator | Agent is actively running |
+| Agent Feedback Needed | Orchestrator or you | Agent paused waiting for input; or you moved it here to send feedback after Human Review |
+| Human Review | Orchestrator | Agent finished — PR is open, your review required |
+| Done | You | Accepted; workspace cleaned up on next reconcile |
+| Cancelled | You | Abandoned; workspace cleaned up on next reconcile |
+
+### Signal protocol
+
+Agents communicate back to the orchestrator by writing `AGENT_SIGNAL:` lines to stdout. The orchestrator scans every line of the Claude stream-json output. Three signal types are defined:
+
+| Signal type | Emitted when | Orchestrator response |
+|---|---|---|
+| `human_input_needed` | Agent hit a decision it cannot make alone | Linear → Agent Feedback Needed; run paused; comment posted with question |
+| `ready_for_review` | Agent finished the task | Linear → Human Review; run set to `waiting_human`; comment posted with summary and artifacts |
+| `plan_decomposed` | Planning Agent finished decomposing a plan issue | Linear phase issues created and moved to Plan Approved; plan issue → Done |
+
+Agents that exit without emitting a signal are treated as failures and retried up to `retry.max_attempts` times (default: 3) with exponential backoff (5s / 15s / 60s).
+
+---
+
+## TUI keyboard shortcuts
+
+| Key | Action |
 |---|---|
-| Plan Approved | You move issues here to authorize agent work |
-| In Progress | Set automatically when a run starts |
-| Agent Feedback Needed | Set when the agent emits `human_input_needed` |
-| Human Review | Set when the agent emits `ready_for_review` |
-
-**The states are created, but they appear in "Hidden columns" on the team board by default.** Linear hides custom workflow states until you explicitly show them.
-
-To unhide them:
-1. Open your team's board view in Linear.
-2. Look for the **"Hidden columns"** button on the right side of the board.
-3. Click it and enable **Plan Approved**, **Agent Feedback Needed**, and **Human Review**.
-
-Once visible, your board shows the full pipeline: Todo → Plan Approved → In Progress → Agent Feedback Needed / Human Review → Done.
-
----
-
-## Your first run
-
-**Step 1 — Create a Linear issue in your team.** Write a clear title and description. The description is passed directly to the agent as its task specification, so be specific about what you want.
-
-**Step 2 — Add a label.** Apply `frontend` (or `frontend` + `bug`, or `design`) to the issue. Without a recognized label, Resonance will reject the issue.
-
-**Step 3 — Move to Plan Approved.** Drag the issue to the Plan Approved column (make sure it's unhidden — see above). This is your explicit authorization for the agent to begin.
-
-**Step 4 — Start the orchestrator if it isn't running.** In your terminal: `./onair.sh`
-
-**Step 5 — Wait up to 60 seconds.** Resonance polls Linear on a 60-second interval. When it picks up the issue, it moves it to In Progress automatically.
-
-**Step 6 — Monitor with the CLI:**
-```bash
-resonance status              # see all runs and their current status
-resonance status RND-123      # detail for your issue: status, branch, log file
-resonance logs RND-123        # recent event stream for this run
-```
-
-**Step 7 — Respond to signals.** If the agent pauses with `human_input_needed`, you'll see the Linear issue move to Agent Feedback Needed and a comment with the question. Use:
-```bash
-resonance feedback RND-123 "use the secondary button variant here"
-resonance approve RND-123     # to approve without additional feedback
-```
-
-**Step 8 — Review.** When the agent finishes, the issue moves to Human Review and a comment is posted with a preview URL (if applicable). Review the code branch. Merge when satisfied.
-
----
-
-## Commands reference
-
-Both `resonance` and `reso` work as the CLI name.
-
-```bash
-# Setup and health
-resonance setup               # guided wizard: credentials + create Linear states/labels
-resonance doctor              # verify credentials, dependencies, and Linear configuration
-
-# Monitoring
-resonance status              # all runs on record with status, task type, last event
-resonance status RND-123      # detail for one run: status, branch, log file, artifacts
-resonance logs RND-123        # recent events for a run (default: last 50)
-resonance attach RND-123      # print worktree path and log file path for manual inspection
-
-# Human control
-resonance approve RND-123     # resume a run waiting for human input (waiting_human or paused)
-resonance feedback RND-123 "text"  # queue feedback for the agent; run resumes automatically
-resonance pause RND-123       # pause an active run cleanly (resume later with approve)
-resonance abort RND-123       # stop a run permanently; workspace preserved for inspection
-resonance abort RND-123 --yes # skip the confirmation prompt
-
-# TUI (Milestone 2)
-resonance watch               # placeholder — TUI dashboard is coming in Milestone 2
-```
-
----
-
-## Configuration
-
-**`.env`** — credentials, written by `./setup.sh`, never committed:
-
-```
-LINEAR_API_KEY=lin_api_...         # required
-LINEAR_TEAM_ID=<uuid>              # required — the team Resonance watches
-FIGMA_API_KEY=figd_...             # optional — required for design_to_code tasks
-GITHUB_TOKEN=ghp_...               # optional — required for PR creation (Milestone 3)
-```
-
-Note: the variable is `LINEAR_TEAM_ID`, not `LINEAR_PROJECT_ID`. The setup wizard writes the correct name; if you have an old `.env` with `LINEAR_PROJECT_ID`, `resonance setup` will migrate it.
-
-**`WORKFLOW.md`** — runtime policy, committed and safe to share:
-- Defines which labels map to which task types
-- Sets polling interval (default: 60s), max parallel runs (default: 2), retry policy (max 3 attempts), stall timeout (30 minutes)
-- Controls required artifacts per task type, verify levels, and iteration limits
-- No credentials — edit this to tune orchestrator behaviour for your team
-
-Changes to `WORKFLOW.md` take effect on the next orchestrator restart.
+| `q` | Quit (also stops the orchestrator) |
+| `r` | Refresh state from disk |
+| `l` | Refresh Linear pipeline view |
+| `p` | Set or change project scope |
+| `Tab` | Cycle run selection (shows `>` prefix) |
+| `Enter` | Open detail modal for selected run |
+| `f` | Send feedback to selected agent |
+| `a` | Approve / resume selected run |
+| `x` | Abort selected run |
+| `v` | Toggle raw log viewer for selected run |
+| `c` | Clear completed/failed runs and event log |
+| `d` | Launch end-to-end demo (creates a plan issue in Linear) |
+| `e` | Open full event browser |
+| `?` | Help screen |
 
 ---
 
 ## Architecture
 
-```
-orchestrator/          Runtime — polls Linear, manages worktrees, runs Claude
-  main.py              Entry point (run via ./onair.sh)
-  poller.py            Main loop: tick, classify, start/advance/reconcile runs
-  runner.py            Subprocess management: launches claude, parses stream-json, detects AGENT_SIGNALs
-  classifier.py        Maps issue labels to task type config from WORKFLOW.md
-  workspace.py         Creates and manages git worktrees
-  linear_client.py     Linear GraphQL API client
-  state.py             Reads/writes runs/state.json and runs/commands.jsonl
-  events.py            Appends to runs/events.jsonl
-  hooks/               Event bridge, artifact poster, uncertainty detector, phase tracker
-  config.py            Loads .env + WORKFLOW.md into a single Config object
+Four pieces work together:
 
-cli/
-  main.py              resonance/reso CLI — setup, doctor, status, approve, feedback, pause, abort, attach, logs, watch
+| Component | Path | Role |
+|---|---|---|
+| Orchestrator | `orchestrator/` | Main loop: polls Linear, manages runs, drives the state machine |
+| Runner | `orchestrator/runner.py` | Launches `claude -p` subprocess, parses stream-json, detects AGENT_SIGNALs |
+| TUI | `tui/app.py` | Textual dashboard reading `runs/state.json` and `runs/events.jsonl` |
+| Linear | via API | Source of truth for issue state and human decisions |
 
-runs/                  Runtime state — gitignored
-  state.json           Current state of all runs (authoritative)
-  events.jsonl         Append-only structured event log
-  commands.jsonl       CLI commands queued for the orchestrator
-  logs/                Per-run log files: RND-123-20260428T143200.log
-
-workspaces/            Git worktrees — one per active issue, gitignored
-  RND-123/             Isolated worktree on branch agent/RND-123
-
-WORKFLOW.md            Policy contract — task types, retry config, concurrency
-.env                   Credentials — gitignored, written by setup
-.env.example           Template — committed, shows required variables
-docs/                  Architecture docs, design notes, this runbook
-```
+The orchestrator and TUI run as separate processes started by `./onair.sh`. They communicate through files: the orchestrator writes `runs/state.json` and `runs/events.jsonl`; the TUI reads them. CLI commands (approve, feedback, abort) are appended to `runs/commands.jsonl` and picked up by the orchestrator on its next tick.
 
 ---
 
-## Milestone status
+## Configuration
 
-- **Milestone 1 — Orchestrator core** complete: polling, worker management, git worktrees, AGENT_SIGNAL protocol, CLI (setup, doctor, status, approve, feedback, pause, abort, attach, logs), Linear state management
-- **Milestone 2 — TUI dashboard**: real-time Textual dashboard (`resonance watch`). Not yet built; the command currently prints a placeholder message.
-- **Milestone 3 — cc-pipeline integration**: plan gate wiring, automated PR creation, execution reports posted to Linear
+`WORKFLOW.md` is the runtime policy file — committed, no credentials, edit to tune behaviour. Changes take effect on the next orchestrator restart.
+
+Key settings:
+
+| Setting | WORKFLOW.md path | Default |
+|---|---|---|
+| Eligibility state (trigger) | `linear.eligibility_state` | `Plan Approved` |
+| Poll interval | `polling.interval_seconds` | 15 |
+| Reconcile interval | `polling.reconcile_interval_seconds` | 120 |
+| Max parallel runs | `concurrency.max_parallel_runs` | 2 |
+| Max retries | `retry.max_attempts` | 3 |
+| Backoff (seconds) | `retry.backoff_seconds` | `[5, 15, 60]` |
+| Stall timeout | `retry.on_stall_minutes` | 30 |
+
+Task types are defined in `task_types:` — add a new block to support a new label combination without changing orchestrator code.
+
+`.env` holds credentials (`LINEAR_API_KEY`, `LINEAR_TEAM_ID`, optionally `LINEAR_PROJECT_ID`, `FIGMA_API_KEY`, `GITHUB_TOKEN`). Written by `./setup.sh`, never committed.
+
+For detailed operation, troubleshooting, and recovery procedures, see `docs/operator-runbook.md`.
