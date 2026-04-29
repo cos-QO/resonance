@@ -1,6 +1,6 @@
 """
 Git worktree lifecycle management.
-Each issue gets an isolated worktree at workspaces/{issue_id} on branch agent/{issue_id}.
+Each issue gets an isolated worktree at workspaces/{team}/{issue_id} on branch agent/{issue_id}.
 The orchestrator writes a minimal .claude/settings.json pointing at shared plugin dirs.
 """
 import json
@@ -34,6 +34,7 @@ class WorkspaceManager:
             logger.info("workspace already exists issue=%s path=%s", issue_id, path)
             return path
 
+        path.parent.mkdir(parents=True, exist_ok=True)
         self._git_worktree_add(path, branch)
         self._write_agent_config(path, issue_id)
         _ensure_log_dir()
@@ -66,9 +67,14 @@ class WorkspaceManager:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _team_prefix(issue_id: str) -> str:
+        return issue_id.split("-")[0] if "-" in issue_id else issue_id
+
     def _path(self, issue_id: str) -> Path:
+        team_prefix = self._team_prefix(issue_id)
         naming = self._config.workflow["workspace"]["naming"]
-        return self._base / naming.format(issue_id=issue_id)
+        return self._base / naming.format(issue_id=issue_id, team_prefix=team_prefix)
 
     def _branch(self, issue_id: str) -> str:
         naming = self._config.workflow["workspace"]["branch_naming"]
@@ -85,15 +91,21 @@ class WorkspaceManager:
     def _write_agent_config(self, worktree_path: Path, issue_id: str) -> None:
         """
         Write a minimal .claude/settings.json into the worktree.
-        Points at shared plugin dirs so agents use shared cc-pipeline skills.
+        Uses absolute paths for plugin dirs so depth doesn't matter.
         """
         claude_dir = worktree_path / ".claude"
         claude_dir.mkdir(exist_ok=True)
 
+        repo_root = Path.cwd().resolve()
         agent_cfg = self._config.workflow["workspace"]["agent_config"]
+
+        # Resolve repo-root-relative paths to absolute — depth-independent
+        plugin_dirs = [str(repo_root / p) for p in agent_cfg["plugin_dirs"]]
+        mcp_config = str(repo_root / agent_cfg["mcp_config"])
+
         settings = {
-            "pluginDirs": agent_cfg["plugin_dirs"],
-            "mcpConfig": agent_cfg["mcp_config"],
+            "pluginDirs": plugin_dirs,
+            "mcpConfig": mcp_config,
             "permissions": {
                 "allow": [
                     "mcp__*",
@@ -118,10 +130,10 @@ class WorkspaceManager:
             json.dump(settings, f, indent=2)
 
         # Symlink shared memory so workers can read standards and write reports.
-        # Resolves to: workspaces/<issue>/.claude/memory -> ../../.claude/memory
+        # Absolute path — resolves correctly regardless of worktree nesting depth.
         memory_link = claude_dir / "memory"
         if not memory_link.exists():
-            memory_link.symlink_to(Path("../../.claude/memory"))
+            memory_link.symlink_to(repo_root / ".claude" / "memory")
 
 
 def _ensure_log_dir() -> None:

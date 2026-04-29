@@ -360,6 +360,7 @@ class Poller:
                 logger.exception("failed to post success to Linear issue=%s", issue_id)
 
         write_event(issue_id, "run_complete", artifacts=result.artifacts)
+        self._write_checkpoint(issue_id, "human_review")
 
     def _handle_failure(
         self,
@@ -666,6 +667,7 @@ class Poller:
                 del self._runners[issue_id]
             run_state.update_run(issue_id, status="paused")
             write_event(issue_id, "run_paused")
+            self._write_checkpoint(issue_id, "paused")
 
         elif action == "abort":
             runner = self._runners.get(issue_id)
@@ -690,6 +692,43 @@ class Poller:
             if run and run["status"] == "waiting_human" and issue_id not in self._runners:
                 self._retry_run(issue_id)
             write_event(issue_id, "run_approved")
+
+    # ── RESONANCE.md checkpoint ────────────────────────────────────────────────
+
+    def _write_checkpoint(self, issue_id: str, status: str) -> None:
+        """Write RESONANCE.md to the issue's worktree. Silently skips if no worktree."""
+        run = run_state.get_run(issue_id)
+        if not run:
+            return
+        worktree = run.get("worktree", "")
+        branch = run.get("branch", f"agent/{issue_id}")
+        linear_uuid = run.get("linear_uuid", "")
+
+        issue_url = ""
+        issue_title = issue_id
+        if linear_uuid:
+            try:
+                issue = self._linear.get_issue(linear_uuid)
+                if issue:
+                    issue_url = issue.get("url", "")
+                    issue_title = issue.get("title", issue_id)
+            except Exception:
+                pass
+
+        try:
+            dest = issue_memory.write_resonance_checkpoint(
+                issue_id=issue_id,
+                worktree_path=worktree,
+                issue_url=issue_url,
+                issue_title=issue_title,
+                branch=branch,
+                by="resonance",
+                status=status,
+            )
+            if dest:
+                logger.info("RESONANCE.md written issue=%s path=%s", issue_id, dest)
+        except Exception:
+            logger.exception("failed to write RESONANCE.md issue=%s", issue_id)
 
     # ── Reconciliation ─────────────────────────────────────────────────────────
 

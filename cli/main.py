@@ -14,6 +14,8 @@ Usage examples:
   resonance pause QO-123                             pause a run
   resonance abort QO-123                             stop permanently
   resonance attach QO-123                            print worktree + log paths
+  resonance checkpoint QO-123                        write RESONANCE.md to worktree
+  resonance checkpoint QO-123 --push                 write RESONANCE.md and push branch
 
   resonance watch                                    TUI dashboard (Milestone 2)
 """
@@ -44,6 +46,7 @@ except ImportError:
 from orchestrator import state as run_state
 from orchestrator.events import tail as events_tail
 from orchestrator.state import post_command
+from orchestrator import memory as issue_memory
 
 app = typer.Typer(name="resonance", help="Resonance orchestrator control", add_completion=False)
 console = Console()
@@ -1232,6 +1235,69 @@ def attach(issue_id: str = typer.Argument(..., help="Issue identifier e.g. QO-12
     console.print(f"[bold]Log file:[/bold]  {log_file}")
     console.print(f"\n[dim]cd {worktree}[/dim]")
     console.print(f"[dim]tail -f {log_file}[/dim]\n")
+
+
+# ── checkpoint ─────────────────────────────────────────────────────────────────
+
+@app.command()
+def checkpoint(
+    issue_id: str = typer.Argument(..., help="Issue identifier e.g. RND-22-P1-B1"),
+    push: bool = typer.Option(False, "--push", help="Push the branch to remote after writing RESONANCE.md"),
+):
+    """Write a RESONANCE.md checkpoint to the issue worktree.
+
+    Captures current run state so any session (or another machine) can load
+    context via /reso. Use --push to push the branch to GitHub for cross-machine access.
+    """
+    run = run_state.get_run(issue_id)
+    if not run:
+        console.print(f"[red]No run found for {issue_id}[/red]")
+        raise typer.Exit(1)
+
+    worktree = run.get("worktree", "")
+    branch = run.get("branch", f"agent/{issue_id}")
+    status = run.get("status", "unknown")
+
+    if not worktree:
+        console.print(f"[red]No worktree recorded for {issue_id}[/red]")
+        raise typer.Exit(1)
+
+    dest = issue_memory.write_resonance_checkpoint(
+        issue_id=issue_id,
+        worktree_path=worktree,
+        issue_url="",
+        issue_title=issue_id,
+        branch=branch,
+        by="resonance",
+        status=status,
+    )
+
+    if not dest:
+        console.print(f"[red]Worktree not found at {worktree}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓ RESONANCE.md written:[/green] {dest}")
+    console.print(f"  Issue:    {issue_id}")
+    console.print(f"  Status:   {status}")
+    console.print(f"  Branch:   {branch}")
+    console.print(f"  Worktree: {worktree}")
+
+    if push:
+        import subprocess
+        result = subprocess.run(
+            ["git", "push", "-u", "origin", branch],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            console.print(f"[green]✓ Branch pushed:[/green] {branch}")
+        else:
+            console.print(f"[yellow]⚠ Push failed:[/yellow] {result.stderr.strip()}")
+            console.print("[dim]You can push manually: cd {worktree} && git push -u origin {branch}[/dim]")
+
+    console.print(f"\n[dim]Load context in any Claude Code session:[/dim]")
+    console.print(f"[dim]  /reso {issue_id}[/dim]\n")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

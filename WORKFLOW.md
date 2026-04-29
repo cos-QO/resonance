@@ -264,9 +264,9 @@ workspace:
   # All worktrees are created here. Directory is gitignored.
   base_dir: workspaces/
 
-  # Workspace directory is named after the issue identifier.
-  # Example: workspaces/QO-123
-  naming: "{issue_id}"
+  # Workspace directory is grouped by team prefix, then issue identifier.
+  # Example: workspaces/QO/QO-123
+  naming: "{team_prefix}/{issue_id}"
 
   # Each issue gets an isolated git worktree on its own branch.
   isolation: git_worktree
@@ -283,10 +283,12 @@ workspace:
   # Minimal .claude/ config written into each workspace by the orchestrator.
   # Points at the shared plugin directories. Do not duplicate content here.
   agent_config:
+    # Paths are relative to the repo root. The orchestrator resolves them to
+    # absolute paths when writing settings.json, so worktree depth is irrelevant.
     plugin_dirs:
-      - "../../.claude/cc-pipeline"
-      - "../../.claude/cc-qo-skills"
-    mcp_config: "../../.mcp.json"
+      - ".claude/cc-pipeline"
+      - ".claude/cc-qo-skills"
+    mcp_config: ".mcp.json"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WORKER CONFIGURATION

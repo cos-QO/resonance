@@ -45,7 +45,7 @@ claude -p "{assembled_prompt}" \
   --max-turns 50
 ```
 
-All paths are relative to the worktree root (`workspaces/QO-123/`).
+All paths are relative to the worktree root (`workspaces/QO/QO-123/`).
 
 ### Flags explained
 
@@ -69,7 +69,7 @@ The `--mcp-config` file loaded depends on the task type, controlled by WORKFLOW.
 | `frontend_bug` | Linear only |
 
 The worker adapter generates a task-specific mcp config file in the workspace
-`workspaces/QO-123/.claude/mcp.json` before launching Claude. This avoids
+`workspaces/QO/QO-123/.claude/mcp.json` before launching Claude. This avoids
 modifying the repo root `.mcp.json`.
 
 ---
@@ -114,7 +114,7 @@ You are a Claude Code agent working on Linear issue {issue_id}: "{title}".
 
 Task type: {task_type}
 Iteration: {n} of max {max_iterations}
-Worktree: workspaces/{issue_id}
+Worktree: workspaces/{team_prefix}/{issue_id}
 
 == APPROVED PLAN ==
 {plan_content}

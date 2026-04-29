@@ -76,6 +76,8 @@ resonance feedback QO-123 "text"    # send feedback to agent
 resonance pause QO-123              # pause without aborting
 resonance abort QO-123              # stop permanently
 resonance attach QO-123             # print worktree + log paths
+resonance checkpoint QO-123         # write RESONANCE.md to worktree (human handoff prep)
+resonance checkpoint QO-123 --push  # write RESONANCE.md and push branch to GitHub
 resonance watch                     # TUI dashboard (Textual)
 resonance plan                      # interactive issue/milestone creator
 resonance project list              # list Linear projects
@@ -110,7 +112,7 @@ pip install -e .
 
 1. Poll Linear every 15s for issues in `Plan Approved` state
 2. Classify issue by label → task type (`design_to_code`, `frontend_feature`, `frontend_bug`, `backend_feature`, `backend_bug`, `plan`)
-3. Create a git worktree at `workspaces/{issue_id}` on branch `agent/{issue_id}`
+3. Create a git worktree at `workspaces/{team_prefix}/{issue_id}` on branch `agent/{issue_id}`
 4. Build prompt and launch `claude -p --output-format stream-json --permission-mode bypassPermissions`
 5. Parse `AGENT_SIGNAL: {"type": "..."}` events from stdout to detect state transitions
 6. On `ready_for_review` → move Linear issue to `Human Review`, post summary comment
@@ -194,7 +196,7 @@ paused  → running       (on approve)
 
 ### Workspace isolation
 
-Each issue gets a git worktree (`workspaces/{issue_id}`) with its own branch (`agent/{issue_id}`). The orchestrator writes a `.claude/settings.json` into the worktree pointing at shared plugin dirs (`../../.claude/cc-pipeline`, `../../.claude/cc-qo-skills`) and the shared `.mcp.json`. The `ISSUE_ID` env var is injected into every worker session.
+Each issue gets a git worktree (`workspaces/{team_prefix}/{issue_id}`) with its own branch (`agent/{issue_id}`). The orchestrator writes a `.claude/settings.json` into the worktree with absolute paths to the shared plugin dirs (`.claude/cc-pipeline`, `.claude/cc-qo-skills`) and `.mcp.json`. The `ISSUE_ID` env var is injected into every worker session.
 
 Worktrees are cleaned up when the Linear issue reaches `Done` or `Cancelled`.
 
@@ -216,6 +218,19 @@ Configured in `.mcp.json`:
 - **context7** — live library/framework documentation
 - **figma** — design file access (requires `FIGMA_API_KEY`)
 
+## Human-in-the-loop plugin (cc-resonance)
+
+`.claude/cc-resonance/` — operator interface for working alongside Resonance.
+
+| Command | Purpose |
+|---|---|
+| `/reso <ID>` | Load full issue context (hierarchy, comments, memory, RESONANCE.md) into any session |
+| `/create-pep [title]` | Author a PEP interactively and push it to Linear |
+| `/reso-takeover <ID>` | Claim control of a running issue, pause Resonance, get worktree path |
+| `/reso-handback [note]` | Commit work, post handback comment, update Linear state |
+
+The `RESONANCE.md` file in each worktree root is the portable checkpoint — written by Resonance on pause/Human Review, updated by humans on handback. Readable on GitHub without cloning.
+
 ## Worker plugins (cc-qo-skills)
 
 `.claude/cc-qo-skills` is a symlink to the shared QO skills module. Workers get this via `--plugin-dir ../../.claude/cc-qo-skills`. Provides 40+ skills including:
@@ -234,7 +249,7 @@ Workers are prompted with their available skills in the `## Skills Available` se
 
 ## QO Design System Reference
 
-`.claude/memory/standards/connectui-design-system.md` — authoritative token reference (colors, typography, spacing, shape, component list) derived from the connect-ui repo design tokens. Workers access this via a symlink at `workspaces/{issue_id}/.claude/memory` → `../../.claude/memory`.
+`.claude/memory/standards/connectui-design-system.md` — authoritative token reference (colors, typography, spacing, shape, component list) derived from the connect-ui repo design tokens. Workers access this via an absolute symlink at `workspaces/{team_prefix}/{issue_id}/.claude/memory` → `<repo-root>/.claude/memory`.
 
 `.claude/memory/standards/connectui-stack.md` — technology stack reference (React, MUI v7, TanStack, Zustand, Firebase, conventions).
 

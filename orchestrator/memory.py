@@ -194,6 +194,65 @@ def write_completion_report(issue_id: str, content: str) -> None:
     (_dir(issue_id) / "completion-report.md").write_text(content)
 
 
+# ── RESONANCE.md (portable checkpoint written to worktree root) ──────────────
+
+def write_resonance_checkpoint(
+    issue_id: str,
+    worktree_path: str,
+    issue_url: str,
+    issue_title: str,
+    branch: str,
+    by: str,
+    status: str,
+    progress_lines: list[str] | None = None,
+    whats_left: str = "",
+    decisions: str = "",
+) -> Path | None:
+    """Write RESONANCE.md to the worktree root.
+
+    Called on pause, Human Review transition, and via `resonance checkpoint`.
+    Returns the path written, or None if the worktree does not exist.
+    """
+    wt = Path(worktree_path)
+    if not wt.exists():
+        return None
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    progress_block = "\n".join(progress_lines) if progress_lines else "_No progress recorded yet_"
+
+    resume_note = (
+        f"1. `cd {worktree_path}`\n"
+        f"2. `/reso {issue_id}` — loads full context\n"
+        f"3. Continue from the first unchecked item above"
+    )
+    if status in ("Done", "complete"):
+        resume_note = "No further work needed in this worktree."
+
+    content = f"""# RESONANCE — {issue_id}
+Updated: {ts}  |  By: {by}
+Linear: {issue_url}  |  Branch: {branch}  |  Status: {status}
+
+## Issue
+{issue_title}
+
+## Progress
+{progress_block}
+
+## What's Left
+{whats_left or "_See unchecked items above_"}
+
+## Key Decisions
+{decisions or "_None recorded_"}
+
+## How to Resume
+{resume_note}
+"""
+
+    dest = wt / "RESONANCE.md"
+    dest.write_text(content)
+    return dest
+
+
 # ── Context brief (for agent prompts and /pd-issue) ───────────────────────────
 
 def build_context_brief(issue_id: str, include_plan: bool = True) -> str:

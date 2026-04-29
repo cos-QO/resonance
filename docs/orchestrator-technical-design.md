@@ -126,45 +126,26 @@ When task type is `None`, the orchestrator posts the unsupported comment defined
 ### Creation
 
 ```bash
-# 1. Create git worktree on a new branch
-git worktree add workspaces/QO-123 -b agent/QO-123
+# 1. Create team prefix dir then git worktree on a new branch
+git worktree add workspaces/QO/QO-123 -b agent/QO-123
 
 # 2. Write minimal .claude/settings.json into the workspace
-# Points plugin dirs at ../../.claude/cc-pipeline and ../../.claude/cc-qo-skills
-# Activates orchestrator hooks (event_bridge, uncertainty_detector, etc.)
+# Uses absolute paths to plugin dirs — depth-independent
 orchestrator.workspace.write_agent_config(worktree_path, issue, task_type)
 
 # 3. Record workspace in state.json
 state_manager.create_run(issue_id, worktree_path, task_type)
 ```
 
-The `.claude/settings.json` written into each workspace:
+The `.claude/settings.json` written into each workspace (paths are absolute):
 
 ```json
 {
-  "plugins": [
-    "../../.claude/cc-pipeline",
-    "../../.claude/cc-qo-skills"
+  "pluginDirs": [
+    "/abs/path/to/repo/.claude/cc-pipeline",
+    "/abs/path/to/repo/.claude/cc-qo-skills"
   ],
-  "mcpConfig": "../../.mcp.json",
-  "hooks": {
-    "Stop": [
-      { "type": "command", "command": "python3 ../../orchestrator/hooks/uncertainty_detector.py" },
-      { "type": "command", "command": "python3 ../../orchestrator/hooks/event_bridge.py stop" }
-    ],
-    "SubagentStop": [
-      { "type": "command", "command": "python3 ../../orchestrator/hooks/phase_tracker.py" },
-      { "type": "command", "command": "python3 ../../orchestrator/hooks/artifact_poster.py" }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          { "type": "command", "command": "python3 ../../orchestrator/hooks/event_bridge.py file_write" }
-        ]
-      }
-    ]
-  }
+  "mcpConfig": "/abs/path/to/repo/.mcp.json"
 }
 ```
 
@@ -174,7 +155,7 @@ Triggered when issue reaches a terminal state (`Done`, `Cancelled`) or when
 the workspace is older than `workspace.max_age_hours` with no active run.
 
 ```bash
-git worktree remove workspaces/QO-123 --force
+git worktree remove workspaces/QO/QO-123 --force
 ```
 
 State record moved from `active` to `archived` in `runs/state.json`.
@@ -211,7 +192,7 @@ Orphan detection runs in the reconciler and triggers recovery (see Retry Policy)
     "status": "running",
     "task_type": "design_to_code",
     "worker": "claude-sonnet",
-    "worktree": "workspaces/QO-123",
+    "worktree": "workspaces/QO/QO-123",
     "branch": "agent/QO-123",
     "pid": 48291,
     "iteration": 2,

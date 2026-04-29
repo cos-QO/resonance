@@ -10,7 +10,7 @@ Resonance is a supervised agentic delivery pipeline. It polls a Linear team for 
 
 2. Move the issue to **Plan Approved** in Linear. This is your explicit authorization — the orchestrator will not touch issues in any other state.
 
-3. Within 15 seconds, the orchestrator picks up the issue. It re-fetches it from Linear to confirm the state is still Plan Approved (fail-closed), creates a git worktree at `workspaces/<issue-id>/` on branch `agent/<issue-id>`, writes a `.claude/settings.json` pointing at shared plugin directories, and launches `claude -p "<prompt>" --output-format stream-json --permission-mode bypassPermissions`. Linear moves to **In Progress** and the `RES` label is added.
+3. Within 15 seconds, the orchestrator picks up the issue. It re-fetches it from Linear to confirm the state is still Plan Approved (fail-closed), creates a git worktree at `workspaces/<team-prefix>/<issue-id>/` on branch `agent/<issue-id>`, writes a `.claude/settings.json` pointing at shared plugin directories, and launches `claude -p "<prompt>" --output-format stream-json --permission-mode bypassPermissions`. Linear moves to **In Progress** and the `RES` label is added.
 
    Workers are QO-specialized: each prompt opens with a task-type persona ("QO Frontend Engineer", "QO Project Manager", etc.) and a numbered skills workflow listing which slash commands to use. All 40+ cc-qo-skills are available (`/connectui-dev`, `/verify`, `/qo-prototype`, `/qo-pr`, `/review`, etc.). Workers read the Queen One design system tokens (`connectui-design-system.md`) and stack reference (`connectui-stack.md`) via a shared memory symlink in every worktree.
 
@@ -26,7 +26,7 @@ Resonance is a supervised agentic delivery pipeline. It polls a Linear team for 
    ```
    Resonance moves the issue to **Human Review** and posts a comment with the summary and preview URL.
 
-6. Review the branch (`workspaces/<issue-id>/`, branch `agent/<issue-id>`). Merge when satisfied, or add feedback in Linear and move to Agent Feedback Needed to trigger another iteration. When done, move the issue to **Done** — the orchestrator detects this on its next reconciliation cycle and cleans up the worktree.
+6. Review the branch (`workspaces/<team-prefix>/<issue-id>/`, branch `agent/<issue-id>`). Merge when satisfied, or add feedback in Linear and move to Agent Feedback Needed to trigger another iteration. When done, move the issue to **Done** — the orchestrator detects this on its next reconciliation cycle and cleans up the worktree.
 
 ---
 

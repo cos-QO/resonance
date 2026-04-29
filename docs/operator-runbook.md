@@ -198,11 +198,69 @@ resonance abort RND-123        # prompts for confirmation
 resonance abort RND-123 --yes  # skip confirmation
 ```
 
-Permanently stops the run. The Claude subprocess is killed. The run is marked `failed` in `runs/state.json` with reason "aborted by operator". The git worktree is preserved in `workspaces/RND-123/` for inspection.
+Permanently stops the run. The Claude subprocess is killed. The run is marked `failed` in `runs/state.json` with reason "aborted by operator". The git worktree is preserved in `workspaces/RND/RND-123/` for inspection.
 
 Linear is not automatically updated on abort — move the issue state manually if needed.
 
 Use abort when a run has gone wrong and you want to start fresh. To restart, move the issue back to Plan Approved in Linear and let the orchestrator pick it up as a new run.
+
+### Checkpoint
+
+```bash
+resonance checkpoint RND-123          # write RESONANCE.md to worktree
+resonance checkpoint RND-123 --push   # write RESONANCE.md and push branch to GitHub
+```
+
+Writes a `RESONANCE.md` file to the issue's worktree root with the current status, progress, and resume instructions. Resonance writes this automatically on pause and Human Review transitions — use `checkpoint` to trigger it manually, or before handing off to a different machine.
+
+`--push` runs `git push -u origin agent/RND-123` from the worktree. Use when you need the checkpoint accessible from another machine via `git show agent/RND-123:RESONANCE.md`.
+
+---
+
+## Human takeover
+
+When you want to continue where Resonance left off — either because it produced partial work or hit max attempts — use the cc-resonance Claude Code plugin commands.
+
+### Starting a new project (PEP)
+
+In any Claude Code session:
+```
+/create-pep "Project Title"
+```
+Walks through an interview, formats the PEP, and creates the `[PEP] Title` Linear project and issue. Move the issue to Plan Approved when satisfied.
+
+### Loading context in a fresh session
+
+```
+/reso RND-123
+```
+Fetches the issue hierarchy (Block → Plan → PEP), all comments, local memory, and `RESONANCE.md`. Works from any terminal — no local Resonance run required.
+
+### Taking over a running issue
+
+```bash
+resonance pause RND-123     # stop the orchestrator run
+```
+
+Then in Claude Code:
+```
+/reso-takeover RND-123
+```
+
+Posts `[HUMAN TAKEOVER]` to Linear, loads full context, and shows you the worktree path to work in. The paused status prevents the orchestrator from restarting on the next poll.
+
+### Handing back
+
+When you're done working:
+```
+/reso-handback "what you did"
+```
+
+Commits uncommitted work, updates `RESONANCE.md`, posts `[HUMAN HANDBACK]` to Linear, and asks where to move the issue state. To resume Resonance afterwards:
+
+```bash
+resonance approve RND-123
+```
 
 ---
 
@@ -233,7 +291,7 @@ resonance attach RND-123
 Prints the worktree path and log file path for a run. Use this to navigate to the worktree or tail the log file manually:
 
 ```bash
-cd workspaces/RND-123
+cd workspaces/RND/RND-123
 tail -f runs/logs/RND-123-20260428T143200.log
 ```
 
@@ -403,7 +461,7 @@ To clear all runtime state and start clean:
 
 # Abort any orphaned worktrees
 ls workspaces/
-# For each: git worktree remove workspaces/RND-123 --force
+# For each: git worktree remove workspaces/RND/RND-123 --force
 
 # Clear runtime state
 rm -f runs/state.json runs/events.jsonl runs/commands.jsonl

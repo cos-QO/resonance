@@ -71,7 +71,7 @@ claude -p "<prompt>" \
   --mcp-config ../../.mcp.json
 ```
 
-The process runs in the worktree directory (`workspaces/<issue-id>/`). stdout is merged with stderr and consumed by a background thread (`_consume_stdout`). Every line is:
+The process runs in the worktree directory (`workspaces/<team-prefix>/<issue-id>/`). stdout is merged with stderr and consumed by a background thread (`_consume_stdout`). Every line is:
 - Attempted as stream-json parse. Text events and tool events are forwarded to the event log.
 - Scanned for `AGENT_SIGNAL:` via regex regardless of whether JSON parsing succeeded.
 
@@ -178,7 +178,7 @@ A PEP (Product Execution Prompt) is the top-level document for a project or feat
 ### Execution issues
 
 1. Issue with a recognized non-`plan` label appears in Plan Approved.
-2. Orchestrator classifies task type, creates worktree (`workspaces/<issue-id>/`), writes `.claude/settings.json`, sets Linear → In Progress, adds `RES` label.
+2. Orchestrator classifies task type, creates worktree (`workspaces/<team-prefix>/<issue-id>/`), writes `.claude/settings.json`, sets Linear → In Progress, adds `RES` label.
 3. Agent runs. Before signalling, it is instructed to: update the Linear issue description (check off completed acceptance criteria, append a Work Summary), post a structured review comment to Linear.
 4. Two outcomes:
    - **Needs input**: agent emits `human_input_needed`. Local run → `needs_input`. Linear → Agent Feedback Needed. Comment posted with question.
@@ -302,23 +302,23 @@ The "blocked" comment is posted only once per orchestrator session (tracked by `
 
 For each new run, `WorkspaceManager.create()` does the following:
 
-1. Creates the worktree:
+1. Creates the worktree directory (`workspaces/<team-prefix>/`) then the worktree:
    ```bash
-   git worktree add -b agent/<issue-id> workspaces/<issue-id> HEAD
+   git worktree add -b agent/<issue-id> workspaces/<team-prefix>/<issue-id> HEAD
    ```
    If the branch already exists (from a prior attempt), falls back to:
    ```bash
-   git worktree add workspaces/<issue-id> agent/<issue-id>
+   git worktree add workspaces/<team-prefix>/<issue-id> agent/<issue-id>
    ```
 
-2. Writes `workspaces/<issue-id>/.claude/settings.json`:
+2. Writes `workspaces/<team-prefix>/<issue-id>/.claude/settings.json` with **absolute** paths — so depth never matters:
    ```json
    {
      "pluginDirs": [
-       "../../.claude/cc-pipeline",
-       "../../.claude/cc-qo-skills"
+       "/abs/path/to/repo/.claude/cc-pipeline",
+       "/abs/path/to/repo/.claude/cc-qo-skills"
      ],
-     "mcpConfig": "../../.mcp.json",
+     "mcpConfig": "/abs/path/to/repo/.mcp.json",
      "permissions": {
        "allow": ["mcp__*", "Bash(*)", "Read(*)", "Write(*)", "Edit(*)",
                  "MultiEdit(*)", "Glob(*)", "Grep(*)", "WebSearch(*)",
@@ -330,11 +330,11 @@ For each new run, `WorkspaceManager.create()` does the following:
    }
    ```
 
-3. Creates `workspaces/<issue-id>/.claude/memory` as a symlink → `../../.claude/memory`. This gives the worker read/write access to the shared project memory at the `/.claude/memory/` path that plugin skills expect. Specifically, `.claude/memory/standards/connectui-design-system.md` and `.claude/memory/standards/connectui-stack.md` become readable as `/.claude/memory/standards/...` inside the worker session.
+3. Creates `workspaces/<team-prefix>/<issue-id>/.claude/memory` as an absolute symlink → `<repo-root>/.claude/memory`. This gives the worker read/write access to the shared project memory. Specifically, `.claude/memory/standards/connectui-design-system.md` and `.claude/memory/standards/connectui-stack.md` become readable as `/.claude/memory/standards/...` inside the worker session.
 
 4. The `claude` command adds `--permission-mode bypassPermissions`, so the agent operates without interactive permission prompts.
 
-The plugin dirs point at the shared `cc-pipeline` and `cc-qo-skills` directories relative to the worktree root. The MCP config (`../../.mcp.json`) connects the Linear, Context7, and Figma MCP servers to the agent session.
+The plugin dirs and MCP config use absolute paths computed from `Path.cwd().resolve()` at workspace creation time, making the configuration depth-independent. The `WORKFLOW.md` `agent_config` section stores repo-root-relative paths (e.g. `.claude/cc-pipeline`) which the orchestrator resolves to absolute before writing `settings.json`.
 
 Worktrees are removed when the issue reaches Done or Cancelled (detected by `_reconcile()`). They are also removed explicitly on `resonance abort` if the `--cleanup` flag is passed (the abort command marks the run failed; the worktree itself is left for inspection by default).
 
@@ -476,7 +476,7 @@ Last 60 events from `runs/events.jsonl`, excluding system startup/shutdown event
 
 Opened with `Enter`. Shows: issue ID, status, task type, iteration, Linear URL, artifacts (with preview URL), latest handoff file contents (from `runs/memory/<issue-id>/handoffs/iter-N.md`), pending question or review instructions, branch/worktree/log paths, and the manual control commands:
 ```
-cd workspaces/<issue-id> && claude
+cd workspaces/<team-prefix>/<issue-id> && claude
 /pd-issue <issue-id>
 ```
 
@@ -535,22 +535,109 @@ Plan issues always receive the planning prompt on retry, not the execution promp
 
 ---
 
-## Manual Control
+## Human-in-the-Loop — cc-resonance Plugin
 
-To work on an issue directly outside the orchestrator:
+The `cc-resonance` Claude Code plugin (`.claude/cc-resonance/`) provides four commands for working alongside Resonance: starting new projects, loading context, taking over from the agent, and handing back.
 
-```bash
-cd workspaces/<issue-id>
-claude
+### /create-pep — start a new project
+
+```
+/create-pep "Payment Processing"
 ```
 
-The `.claude/settings.json` is already in place with the correct plugin dirs and permissions, so the full skill set is available. Use `/pd-issue <issue-id>` inside that Claude session to load issue context from Linear.
+Walks through a short interview (what, why, done-when, domain, scope, plans), formats the full PEP document, then creates the `[PEP] <title>` Linear project and issue with the `pep` label. Move the issue to Plan Approved when ready — Resonance decomposes it automatically.
 
-When to take manual control:
-- The agent has produced partial work and you want to review and adjust before the next iteration.
-- The run has hit max attempts and you want to continue from where it left off.
-- You need to run a specific skill or investigate a problem in the worktree.
+### /reso — context bootstrap
 
-After manual work, move the issue in Linear to the appropriate next state (Human Review if done, Agent Feedback Needed to trigger orchestrator resumption, or Done to close).
+```
+/reso RND-22-P1-B1
+```
 
-The `resonance attach <issue-id>` CLI command prints the worktree path and current log file path without starting anything.
+Loads everything known about an issue into the current session:
+- Linear issue + all ancestors (Block → Plan → PEP) with their descriptions and comments
+- Local memory from `runs/memory/<issue-id>/` (context, handoffs, feedback)
+- `RESONANCE.md` from the worktree if present
+
+Works in any fresh terminal — no local Resonance run required. Outputs a structured brief with current status, what's done, what's left, and key decisions.
+
+### /reso-takeover — claim control from Resonance
+
+```
+/reso-takeover RND-22-P1-B1
+```
+
+1. Reads run status from `runs/state.json`
+2. If running: tells you to run `resonance pause <ID>` first, then re-run the command
+3. Posts `[HUMAN TAKEOVER]` comment to the Linear issue
+4. Loads full context (same as `/reso`)
+5. Outputs the worktree path and branch so you know exactly where to work
+
+The `paused` status prevents the orchestrator from restarting the run on the next poll tick.
+
+### /reso-handback — return control
+
+```
+/reso-handback "implemented JWT token service, tests passing"
+```
+
+1. Commits any uncommitted work in the worktree
+2. Writes/updates `RESONANCE.md` checkpoint with the current progress state
+3. Posts `[HUMAN HANDBACK]` comment to Linear with the summary
+4. Asks which state to move the issue to: Human Review / Done / In Progress (for Resonance to resume) / leave as-is
+5. Updates Linear accordingly
+
+### RESONANCE.md — portable checkpoint
+
+Every active worktree has a `RESONANCE.md` in its root. Resonance writes it automatically on every pause and Human Review transition. Humans update it on handback.
+
+Format:
+```markdown
+# RESONANCE — RND-22-P1-B1
+Updated: 2026-04-29T14:00:00Z  |  By: resonance
+Linear: https://...  |  Branch: agent/RND-22-P1-B1  |  Status: paused
+
+## Progress
+- [x] B1: User model + migration — complete
+- [ ] B2: JWT token service — not started
+
+## What's Left
+Start from src/auth/token.py. Needs issueToken() and verifyToken().
+
+## Key Decisions
+- bcrypt rounds: 12 (matches existing password hashing)
+
+## How to Resume
+1. cd workspaces/RND/RND-22-P1-B1
+2. /reso RND-22-P1-B1 — loads full context
+3. Continue from: B2 — src/auth/token.py
+```
+
+The file is committed to the branch, making it readable on GitHub without a local checkout. Load it from any machine via:
+```bash
+git show agent/RND-22-P1-B1:RESONANCE.md
+```
+
+### resonance checkpoint
+
+```bash
+resonance checkpoint RND-22-P1-B1          # write RESONANCE.md to worktree
+resonance checkpoint RND-22-P1-B1 --push   # write + push branch to GitHub
+```
+
+Writes RESONANCE.md on demand from CLI. Use before a human takeover from a different machine to ensure the checkpoint is current. `--push` makes the branch and checkpoint accessible remotely.
+
+### Typical handoff workflow
+
+```
+Resonance pauses on a block (or you want to continue manually)
+  ↓
+resonance pause RND-22-P1-B1          ← pause the orchestrator
+  ↓
+/reso-takeover RND-22-P1-B1           ← load context + get worktree path
+  ↓
+cd workspaces/RND/RND-22-P1-B1        ← work in the worktree
+  ↓
+/reso-handback "what I did"           ← commit + notify + update Linear
+  ↓
+resonance approve RND-22-P1-B1        ← optional: resume Resonance
+```
