@@ -941,15 +941,29 @@ _SPINNER_FRAMES  = "⠋⠙⠸⠴⠦⠇"
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
 
+def _normalize_project_url(url: str) -> str:
+    """
+    Strip Linear UI tab suffixes from a project URL so matching works regardless
+    of which tab the user copied the URL from.
+    e.g. .../project/slug/overview  → .../project/slug
+         .../project/slug/issues    → .../project/slug
+    """
+    import re
+    # Remove trailing slash, then strip known Linear tab path segments
+    url = url.rstrip("/")
+    url = re.sub(r'/(?:overview|issues|members|settings|cycles|roadmap|docs|updates)$', '', url)
+    return url
+
+
 def _resolve_project(url_or_id: str) -> tuple[str, str] | None:
     """
     Resolve a Linear project URL or UUID to (project_id, project_name).
     Returns None if no match found.
 
     Resolution order:
-    1. Exact URL match against project.url field (handles slugs like /project/d2d)
-    2. URL-contains match: provided URL is a prefix or same path as project.url
-    3. Hex-suffix match against project UUID (legacy format)
+    1. Exact URL match against project.url field (after stripping tab suffixes)
+    2. Project URL is a prefix of the input URL (handles extra path segments)
+    3. Hex-suffix match against project UUID
     4. Direct UUID match
     5. get_project() by UUID
     """
@@ -963,22 +977,22 @@ def _resolve_project(url_or_id: str) -> tuple[str, str] | None:
     project_id   = None
     project_name = None
 
-    # 1. Exact URL match
-    matched = next((p for p in projects if p.get("url", "") == url_or_id.rstrip("/")), None)
+    normalized = _normalize_project_url(url_or_id)
+
+    # 1. Exact URL match (after normalizing tab suffix)
+    matched = next((p for p in projects if p.get("url", "").rstrip("/") == normalized), None)
     if matched:
         project_id, project_name = matched["id"], matched["name"]
 
-    # 2. URL path match — the provided URL path is a suffix of a project's URL path
+    # 2. Project URL is a prefix of what the user pasted (extra path segments ok)
     if not project_id:
-        input_path = re.sub(r'^https?://[^/]+', '', url_or_id).rstrip("/")
-        if input_path:
-            matched = next(
-                (p for p in projects
-                 if re.sub(r'^https?://[^/]+', '', p.get("url", "")).rstrip("/") == input_path),
-                None,
-            )
-            if matched:
-                project_id, project_name = matched["id"], matched["name"]
+        matched = next(
+            (p for p in projects
+             if normalized.startswith(p.get("url", "").rstrip("/"))),
+            None,
+        )
+        if matched:
+            project_id, project_name = matched["id"], matched["name"]
 
     # 3. Hex-suffix match (for UUIDs embedded in slugs like /project/resonance-abc1def2)
     if not project_id:
