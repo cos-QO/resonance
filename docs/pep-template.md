@@ -1,6 +1,18 @@
 # PEP Template — Product Execution Prompt
 
 > Fill Tier 1 for any task. Add Tier 2 for medium/large work. Add Tier 3 and domain variants only when relevant.
+>
+> **Naming convention:** Create the PEP as a Linear issue with the `pep` label inside a project named `[PEP] <title>`.
+> When you move the PEP issue to **Plan Approved**, Resonance reads it and creates Plan issues automatically.
+>
+> **Plan/Block identifiers** (title-based, since Linear assigns numeric IDs):
+> ```
+> PEP issue:    RND-22              ← assigned by Linear
+> Plan 1:       [RND-22-P1] Title   ← created by Resonance
+> Plan 2:       [RND-22-P2] Title
+> Block 1/P1:   [RND-22-P1-B1] Title ← created by Execution Agent
+> Block 2/P1:   [RND-22-P1-B2] Title
+> ```
 
 ---
 
@@ -99,19 +111,31 @@ updated: YYYY-MM-DD
 
 ---
 
-## Phasing
+## Plans
 
-### Phase 1 — Now
+> Each Plan becomes one Linear issue ([PEP-ID-P1], [PEP-ID-P2], ...).
+> Plans can run in parallel or in sequence. Set `Depends on` to enforce order.
+> Resonance sets blocking relations automatically from this section.
 
-* 
+### Plan 1 — <name>
+**Goal:** [What this plan delivers — one sentence]
+**Domain:** frontend | backend | design | mixed
+**Depends on:** none
 
-### Phase 2 — Next
+**Blocks:**
+- B1: [Block title] — [what it implements, ~3–8 hours]
+- B2: [Block title] — [what it implements, depends on B1]
 
-* 
+---
 
-### Phase 3 — Later
+### Plan 2 — <name>  *(add/remove plans as needed)*
+**Goal:** [What this plan delivers]
+**Domain:** frontend | backend | design | mixed
+**Depends on:** Plan 1
 
-* 
+**Blocks:**
+- B1: [Block title] — [what it implements]
+- B2: [Block title] — [what it implements]
 
 ---
 

@@ -63,7 +63,7 @@ class Runner:
         self._proc = subprocess.Popen(
             cmd,
             cwd=str(self._worktree),
-            stdin=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -123,8 +123,9 @@ class Runner:
             "claude",
             "-p", self._prompt,
             "--output-format", "stream-json",
-            "--permission-mode", "acceptEdits",
-            "--name", session_name,   # display name for session picker; flag is --name / -n
+            "--verbose",              # required for stream-json in print mode (claude >= 2.1)
+            "--permission-mode", "bypassPermissions",
+            "--name", session_name,
         ]
 
         # Plugin dirs from workspace agent_config
@@ -177,6 +178,12 @@ class Runner:
             tool_name = event.get("name", "")
             write_event(self._issue_id, "tool_use", tool=tool_name)
 
+        elif event_type == "result":
+            # Final result event — signal may live in the "result" text field
+            result_text = event.get("result", "")
+            if result_text:
+                self._scan_for_signal(result_text)
+
         elif event_type == "usage":
             write_event(
                 self._issue_id,
@@ -211,7 +218,7 @@ class Runner:
         elif sig_type == "human_input_needed":
             run_state.update_run(
                 self._issue_id,
-                status="waiting_human",
+                status="needs_input",
                 pending_question=signal.get("question"),
             )
 
@@ -221,23 +228,37 @@ def build_prompt(
     task_config: dict,
     iteration: int = 1,
     prior_feedback: Optional[list[str]] = None,
+    memory_brief: Optional[str] = None,
 ) -> str:
     """Assemble the prompt sent to Claude for a given issue + iteration."""
-    issue_id = issue.get("identifier", issue["id"])
-    title = issue.get("title", "")
+    issue_id  = issue.get("identifier", issue["id"])
+    title     = issue.get("title", "")
     description = issue.get("description", "") or ""
     task_type = _task_type_label(task_config)
 
     lines = [
+        _build_persona_header(task_config),
+        "",
         f"# Task: {issue_id} — {title}",
         "",
         f"**Task type**: {task_type}",
         f"**Iteration**: {iteration}",
         "",
+    ]
+
+    # Inject local memory context before the issue description on iteration > 1
+    if memory_brief:
+        lines += [memory_brief, ""]
+
+    lines += [
         "## Issue Description",
         description,
         "",
     ]
+
+    skills_section = _build_skills_section(task_config)
+    if skills_section:
+        lines += [skills_section, ""]
 
     if prior_feedback:
         lines += ["## Prior Feedback", ""]
@@ -253,7 +274,50 @@ def build_prompt(
         lines.append(f"- `{artifact}`")
     lines.append("")
 
+    issue_linear_id = issue.get("id", "")
+
     lines += [
+        "## Handoff Protocol",
+        "",
+        "At the end of your session, write a handoff note to:",
+        f"`runs/memory/{issue_id}/handoffs/iter-{iteration}.md`",
+        "",
+        "The handoff must contain:",
+        "- What was done this iteration (specific files, decisions, commands)",
+        "- What is still outstanding",
+        "- What the next iteration should start with",
+        "- Any blockers or caveats",
+        "",
+        "## Before Signalling — Required Updates",
+        "",
+        "Before emitting any signal, complete BOTH of these steps using your Linear MCP tools:",
+        "",
+        "### 1. Update the Linear issue description",
+        f"Use `mcp__linear__linear_search_issues_by_identifier` to fetch issue `{issue_id}`.",
+        f"Then call `mcp__linear__linear_update_issue` with `id: \"{issue_linear_id}\"` to update `description`:",
+        "- Change every completed acceptance criterion: `- [ ]` → `- [x]`",
+        "- Append a `## Work Summary` section with: files changed (with paths), key decisions, commands run",
+        "",
+        "### 2. Post a structured review comment",
+        f"Call `mcp__linear__linear_create_comment` with `issueId: \"{issue_linear_id}\"` and this body:",
+        "",
+        "```markdown",
+        "## Review Ready",
+        "",
+        "### What was done",
+        "[Bulleted list — specific files, components, APIs changed]",
+        "",
+        "### Acceptance Criteria",
+        "- [x] [criterion] — [how it was verified]",
+        "- [ ] [criterion] — [reason not completed, if any]",
+        "",
+        "### Insights",
+        "[Observations, trade-offs, edge cases discovered during implementation]",
+        "",
+        "### Recommendations",
+        "[Suggested next steps, follow-ups, or improvements worth considering]",
+        "```",
+        "",
         "## Signal Protocol",
         "",
         "When you need human input, output exactly:",
@@ -272,6 +336,82 @@ def _task_type_label(task_config: dict) -> str:
     detection = task_config.get("detection", {})
     labels = detection.get("labels", [])
     return "+".join(labels) if labels else "unknown"
+
+
+_PERSONAS = {
+    "plan":             "QO Project Manager / Planning Agent",
+    "design_to_code":   "QO Frontend Engineer (Design-to-Code)",
+    "frontend_feature": "QO Frontend Engineer",
+    "frontend_bug":     "QO Frontend Engineer (Bug Investigation)",
+    "backend_feature":  "QO Backend Engineer",
+    "backend_bug":      "QO Backend Engineer (Bug Investigation)",
+}
+
+_SKILL_DESCRIPTIONS = {
+    "connectui-dev":   "prime yourself with ConnectUI design system + code standards",
+    "verify":          "run build / lint / tests at the specified level (L1/L2/L3)",
+    "qo-pr":           "generate a ConnectUI-standard PR description from git diff",
+    "qo-prototype":    "Figma-to-code: fetch design via MCP, map to Orion components, generate code",
+    "qo-component":    "scaffold a new Orion/MUI component with Storybook story",
+    "qo-bug":          "structured bug investigation workflow",
+    "pd-pep":          "extract structured requirements from the Linear issue",
+    "pd-context-pack": "gather broad project awareness before starting work",
+    "pd-plan-post":    "post implementation plan to Linear for human approval",
+    "pd-report-post":  "post execution report to Linear on completion",
+    "pd-github-pr":    "open a GitHub PR linked to this Linear issue",
+    "review":          "deep code review: correctness, style, security, performance",
+}
+
+
+def _build_persona_header(task_config: dict) -> str:
+    task_name = task_config.get("_name", "")
+    persona = _PERSONAS.get(task_name, "QO Agent")
+    return f"You are a **{persona}** working in the Queen One agentic delivery pipeline."
+
+
+def _build_skills_section(task_config: dict) -> str:
+    skills = task_config.get("skills", [])
+    if not skills:
+        return ""
+    lines = [
+        "## Skills Available",
+        "",
+        "The following slash-command skills are loaded and ready. Invoke them in the order shown:",
+        "",
+    ]
+    for i, skill in enumerate(skills, 1):
+        desc = _SKILL_DESCRIPTIONS.get(skill, "")
+        desc_part = f" — {desc}" if desc else ""
+        lines.append(f"{i}. `/{skill}`{desc_part}")
+    lines += [
+        "",
+        "**Recommended workflow for this task type**:",
+    ]
+    # Build workflow hint per task type
+    task_name = task_config.get("_name", "")
+    if task_name in ("design_to_code", "frontend_feature"):
+        lines += [
+            "1. `/pd-pep` — read and structure requirements from the issue",
+            "2. `/connectui-dev <task>` — start implementation in ConnectUI mode",
+            "3. `/verify L2` — run build + lint + tests",
+            "4. `/qo-pr` — generate PR description",
+            "5. `/pd-report-post` — post execution report to Linear",
+        ]
+    elif task_name == "frontend_bug":
+        lines += [
+            "1. `/pd-pep` — structure the bug report",
+            "2. `/connectui-dev <fix description>` — investigate and fix in ConnectUI mode",
+            "3. `/verify L2` — confirm the fix",
+            "4. `/pd-report-post` — post execution report",
+        ]
+    elif task_name in ("backend_feature", "backend_bug"):
+        lines += [
+            "1. `/pd-pep` — structure requirements",
+            "2. Implement the feature/fix",
+            "3. `/verify L2` — run tests",
+            "4. `/pd-report-post` — post execution report",
+        ]
+    return "\n".join(lines)
 
 
 def make_log_path(issue_id: str) -> str:

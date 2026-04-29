@@ -12,19 +12,47 @@ logger = logging.getLogger(__name__)
 
 LINEAR_API = "https://api.linear.app/graphql"
 
-# Required workflow states and their Linear state types
-REQUIRED_STATES = [
-    {"name": "Plan Approved",         "color": "#4CAF50", "type": "unstarted"},
-    {"name": "In Progress",           "color": "#2196F3", "type": "started"},
-    {"name": "Agent Feedback Needed", "color": "#FF9800", "type": "started"},
-    {"name": "Human Review",          "color": "#9C27B0", "type": "started"},
+# Resonance-specific states to create (with role, default name, color, type, description).
+# In Progress and Todo are standard Linear states — we verify but don't create them.
+STATES_TO_CREATE = [
+    {
+        "role": "eligibility",
+        "default": "Plan Approved",
+        "color": "#4CAF50",
+        "type": "unstarted",
+        "description": "move issues here to authorize agent work",
+    },
+    {
+        "role": "feedback",
+        "default": "Agent Feedback Needed",
+        "color": "#FF9800",
+        "type": "started",
+        "description": "set when agent needs human input",
+    },
+    {
+        "role": "review",
+        "default": "Human Review",
+        "color": "#9C27B0",
+        "type": "started",
+        "description": "set when agent finishes — ready for PR review",
+    },
 ]
 
-# Required issue labels
+# Standard Linear states that always exist — Resonance uses but does not create them.
+STATES_STANDARD = [
+    {"role": "in_progress", "default": "In Progress"},
+    {"role": "return",      "default": "Todo"},
+]
+
+# Required issue labels — created by resonance setup if missing
 REQUIRED_LABELS = [
-    {"name": "design",    "color": "#F06292"},
-    {"name": "frontend",  "color": "#4FC3F7"},
-    {"name": "bug",       "color": "#EF5350"},
+    {"name": "RES",      "color": "#FF6B35"},  # Resonance-managed marker
+    {"name": "pep",      "color": "#7C3AED"},  # Product Execution Prompt — triggers PEP Reader Agent
+    {"name": "plan",     "color": "#7C4DFF"},
+    {"name": "design",   "color": "#F06292"},
+    {"name": "frontend", "color": "#4FC3F7"},
+    {"name": "backend",  "color": "#26A69A"},
+    {"name": "bug",      "color": "#EF5350"},
 ]
 
 
@@ -42,7 +70,12 @@ class LinearClient:
         if variables:
             payload["variables"] = variables
         resp = self._client.post(LINEAR_API, json=payload)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            raise RuntimeError(f"Linear API {resp.status_code}: {detail}")
         body = resp.json()
         if "errors" in body:
             raise RuntimeError(f"Linear GraphQL error: {body['errors']}")
@@ -84,35 +117,112 @@ class LinearClient:
 
     # ── Issues ────────────────────────────────────────────────────────────────
 
-    def get_eligible_issues(self, team_id: str, state_name: str) -> list[dict]:
-        """Return all issues in the team that are in `state_name`."""
-        data = self._query(
-            """
-            query EligibleIssues($teamId: String!, $stateName: String!) {
-              issues(
-                filter: {
-                  team: { id: { eq: $teamId } }
-                  state: { name: { eq: $stateName } }
-                }
-                first: 50
-              ) {
-                nodes {
-                  id
-                  identifier
-                  title
-                  description
-                  state { id name }
-                  labels { nodes { id name } }
-                  team { id name }
-                  assignee { id name }
-                  url
-                }
-              }
-            }
-            """,
-            {"teamId": team_id, "stateName": state_name},
-        )
-        return data["issues"]["nodes"]
+    def get_pipeline_issues(
+        self,
+        team_id: str,
+        state_names: list[str],
+        project_id: Optional[str] = None,
+    ) -> list[dict]:
+        """Return all issues in any of the given states (full pipeline view).
+
+        If project_id is provided, scopes the query to that project only.
+        """
+        _ISSUE_FIELDS = """
+            id identifier title updatedAt
+            state { name }
+            labels { nodes { name } }
+            assignee { name }
+        """
+        if project_id:
+            data = self._query(
+                f"""
+                query PipelineIssues($projectId: String!, $states: [String!]) {{
+                  project(id: $projectId) {{
+                    issues(
+                      filter: {{ state: {{ name: {{ in: $states }} }} }}
+                      first: 50
+                    ) {{
+                      nodes {{ {_ISSUE_FIELDS} }}
+                    }}
+                  }}
+                }}
+                """,
+                {"projectId": project_id, "states": state_names},
+            )
+            return data["project"]["issues"]["nodes"]
+        else:
+            data = self._query(
+                f"""
+                query PipelineIssues($teamId: String!, $states: [String!]) {{
+                  team(id: $teamId) {{
+                    issues(
+                      filter: {{ state: {{ name: {{ in: $states }} }} }}
+                      first: 50
+                    ) {{
+                      nodes {{ {_ISSUE_FIELDS} }}
+                    }}
+                  }}
+                }}
+                """,
+                {"teamId": team_id, "states": state_names},
+            )
+            return data["team"]["issues"]["nodes"]
+
+    def get_eligible_issues(
+        self,
+        team_id: str,
+        state_name: str,
+        project_id: Optional[str] = None,
+    ) -> list[dict]:
+        """Return all issues in `state_name`.
+
+        If project_id is provided, scopes the query to that project only.
+        """
+        _ISSUE_FIELDS = """
+            id
+            identifier
+            title
+            description
+            state { id name }
+            labels { nodes { id name } }
+            team { id name }
+            assignee { id name }
+            url
+        """
+        if project_id:
+            data = self._query(
+                f"""
+                query EligibleIssues($projectId: String!, $stateName: String!) {{
+                  project(id: $projectId) {{
+                    issues(
+                      filter: {{ state: {{ name: {{ eq: $stateName }} }} }}
+                      first: 50
+                    ) {{
+                      nodes {{ {_ISSUE_FIELDS} }}
+                    }}
+                  }}
+                }}
+                """,
+                {"projectId": project_id, "stateName": state_name},
+            )
+            return data["project"]["issues"]["nodes"]
+        else:
+            data = self._query(
+                f"""
+                query EligibleIssues($teamId: String!, $stateName: String!) {{
+                  team(id: $teamId) {{
+                    issues(
+                      filter: {{ state: {{ name: {{ eq: $stateName }} }} }}
+                      first: 50
+                    ) {{
+                      nodes {{ {_ISSUE_FIELDS} }}
+                    }}
+                  }}
+                }}
+                """,
+                {"teamId": team_id, "stateName": state_name},
+            )
+            return data["team"]["issues"]["nodes"]
 
     def get_issue(self, issue_id: str) -> Optional[dict]:
         data = self._query(
@@ -127,12 +237,73 @@ class LinearClient:
                 labels { nodes { id name } }
                 team { id name }
                 url
+                inverseRelations {
+                  nodes {
+                    type
+                    relatedIssue { id identifier state { name } }
+                  }
+                }
               }
             }
             """,
             {"id": issue_id},
         )
         return data.get("issue")
+
+    def get_issue_with_comments(self, issue_id: str) -> Optional[dict]:
+        """Fetch issue including all comments — used when resuming after Human Review."""
+        data = self._query(
+            """
+            query IssueWithComments($id: String!) {
+              issue(id: $id) {
+                id
+                identifier
+                title
+                description
+                state { id name }
+                labels { nodes { id name } }
+                team { id name }
+                url
+                comments(first: 50, orderBy: createdAt) {
+                  nodes {
+                    id
+                    body
+                    createdAt
+                    user { name email }
+                  }
+                }
+              }
+            }
+            """,
+            {"id": issue_id},
+        )
+        return data.get("issue")
+
+    def update_issue(
+        self,
+        issue_id: str,
+        description: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> None:
+        """Update issue fields (description, title)."""
+        input_fields: dict = {}
+        if description is not None:
+            input_fields["description"] = description
+        if title is not None:
+            input_fields["title"] = title
+        if not input_fields:
+            return
+        self._query(
+            """
+            mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
+              issueUpdate(id: $id, input: $input) {
+                success
+              }
+            }
+            """,
+            {"id": issue_id, "input": input_fields},
+        )
+        logger.debug("issue updated id=%s fields=%s", issue_id, list(input_fields))
 
     # ── State transitions ─────────────────────────────────────────────────────
 
@@ -249,6 +420,227 @@ class LinearClient:
             {"teamId": team_id, "name": name, "color": color},
         )
         return data["issueLabelCreate"]["issueLabel"]
+
+    def add_issue_label(self, issue_id: str, team_id: str, label_name: str) -> None:
+        """Add a label to an existing issue, preserving existing labels."""
+        # Get current label IDs
+        issue = self.get_issue(issue_id)
+        if not issue:
+            return
+        current_ids = [lbl["id"] for lbl in issue.get("labels", {}).get("nodes", [])]
+        # Resolve the new label
+        new_ids = self._resolve_label_ids(team_id, [label_name])
+        if not new_ids:
+            logger.warning("label '%s' not found — cannot add to issue %s", label_name, issue_id)
+            return
+        combined = list(dict.fromkeys(current_ids + new_ids))  # dedup preserving order
+        self._query(
+            """
+            mutation AddLabel($issueId: String!, $labelIds: [String!]!) {
+              issueUpdate(id: $issueId, input: { labelIds: $labelIds }) {
+                success
+              }
+            }
+            """,
+            {"issueId": issue_id, "labelIds": combined},
+        )
+        logger.debug("added label '%s' to issue %s", label_name, issue_id)
+
+    # ── Projects ──────────────────────────────────────────────────────────────
+
+    def get_projects(self, team_id: str) -> list[dict]:
+        """List all projects in a team."""
+        data = self._query(
+            """
+            query TeamProjects($teamId: String!) {
+              team(id: $teamId) {
+                projects(first: 50) {
+                  nodes { id name description url }
+                }
+              }
+            }
+            """,
+            {"teamId": team_id},
+        )
+        return data["team"]["projects"]["nodes"]
+
+    def get_project(self, project_id: str) -> Optional[dict]:
+        """Get a project by UUID."""
+        data = self._query(
+            """
+            query Project($id: String!) {
+              project(id: $id) { id name description url }
+            }
+            """,
+            {"id": project_id},
+        )
+        return data.get("project")
+
+    # ── Milestones ────────────────────────────────────────────────────────────
+
+    def get_milestones(self, project_id: str) -> list[dict]:
+        """List milestones for a project."""
+        data = self._query(
+            """
+            query ProjectMilestones($projectId: String!) {
+              project(id: $projectId) {
+                projectMilestones {
+                  nodes { id name description }
+                }
+              }
+            }
+            """,
+            {"projectId": project_id},
+        )
+        return data["project"]["projectMilestones"]["nodes"]
+
+    def create_milestone(
+        self,
+        project_id: str,
+        name: str,
+        description: str = "",
+        target_date: Optional[str] = None,
+    ) -> dict:
+        """Create a project milestone. Returns {id, name}."""
+        variables: dict = {"projectId": project_id, "name": name}
+        if description:
+            variables["description"] = description
+        if target_date:
+            variables["targetDate"] = target_date
+
+        data = self._query(
+            """
+            mutation CreateMilestone(
+              $projectId: String!,
+              $name: String!,
+              $description: String,
+              $targetDate: TimelessDate
+            ) {
+              projectMilestoneCreate(input: {
+                projectId: $projectId
+                name: $name
+                description: $description
+                targetDate: $targetDate
+              }) {
+                success
+                projectMilestone { id name }
+              }
+            }
+            """,
+            variables,
+        )
+        return data["projectMilestoneCreate"]["projectMilestone"]
+
+    # ── Issue creation ────────────────────────────────────────────────────────
+
+    def _resolve_label_ids(self, team_id: str, label_names: list[str]) -> list[str]:
+        """Resolve label names to IDs for the given team."""
+        labels = self.get_team_labels(team_id)
+        name_to_id = {l["name"].lower(): l["id"] for l in labels}
+        ids = []
+        for name in label_names:
+            label_id = name_to_id.get(name.lower())
+            if label_id:
+                ids.append(label_id)
+            else:
+                logger.warning("label '%s' not found in team %s — skipping", name, team_id)
+        return ids
+
+    def create_issue(
+        self,
+        team_id: str,
+        title: str,
+        description: str = "",
+        project_id: Optional[str] = None,
+        state_name: Optional[str] = None,
+        priority: int = 0,
+        label_names: Optional[list[str]] = None,
+        parent_id: Optional[str] = None,
+        milestone_id: Optional[str] = None,
+    ) -> dict:
+        """Create a Linear issue. Returns {id, identifier, title, url}."""
+        variables: dict = {"teamId": team_id, "title": title}
+        if description:
+            variables["description"] = description
+        if project_id:
+            variables["projectId"] = project_id
+        if state_name:
+            variables["stateId"] = self.get_state_id(team_id, state_name)
+        if priority:
+            variables["priority"] = priority
+        if parent_id:
+            variables["parentId"] = parent_id
+        if milestone_id:
+            variables["projectMilestoneId"] = milestone_id
+        if label_names:
+            label_ids = self._resolve_label_ids(team_id, label_names)
+            if label_ids:
+                variables["labelIds"] = label_ids
+
+        data = self._query(
+            """
+            mutation CreateIssue(
+              $teamId: String!,
+              $title: String!,
+              $description: String,
+              $projectId: String,
+              $stateId: String,
+              $priority: Int,
+              $parentId: String,
+              $projectMilestoneId: String,
+              $labelIds: [String!]
+            ) {
+              issueCreate(input: {
+                teamId: $teamId
+                title: $title
+                description: $description
+                projectId: $projectId
+                stateId: $stateId
+                priority: $priority
+                parentId: $parentId
+                projectMilestoneId: $projectMilestoneId
+                labelIds: $labelIds
+              }) {
+                success
+                issue { id identifier title url }
+              }
+            }
+            """,
+            variables,
+        )
+        return data["issueCreate"]["issue"]
+
+    def create_issue_relation(
+        self,
+        issue_id: str,
+        related_issue_id: str,
+        relation_type: str = "blocks",
+    ) -> None:
+        """Create a relation between two issues.
+
+        relation_type='blocks' means issue_id blocks related_issue_id.
+        To say B is blocked by A: create_issue_relation(A_id, B_id, 'blocks').
+        """
+        self._query(
+            """
+            mutation CreateRelation(
+              $issueId: String!,
+              $relatedIssueId: String!,
+              $type: IssueRelationType!
+            ) {
+              issueRelationCreate(input: {
+                issueId: $issueId
+                relatedIssueId: $relatedIssueId
+                type: $type
+              }) {
+                success
+                issueRelation { id type }
+              }
+            }
+            """,
+            {"issueId": issue_id, "relatedIssueId": related_issue_id, "type": relation_type},
+        )
+        logger.debug("relation created %s blocks %s", issue_id, related_issue_id)
 
     def close(self) -> None:
         self._client.close()

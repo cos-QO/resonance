@@ -94,6 +94,21 @@ class WorkspaceManager:
         settings = {
             "pluginDirs": agent_cfg["plugin_dirs"],
             "mcpConfig": agent_cfg["mcp_config"],
+            "permissions": {
+                "allow": [
+                    "mcp__*",
+                    "Bash(*)",
+                    "Read(*)",
+                    "Write(*)",
+                    "Edit(*)",
+                    "MultiEdit(*)",
+                    "Glob(*)",
+                    "Grep(*)",
+                    "WebSearch(*)",
+                    "WebFetch(*)",
+                    "TodoWrite(*)",
+                ],
+            },
             "env": {
                 "ISSUE_ID": issue_id,
             },
@@ -101,6 +116,12 @@ class WorkspaceManager:
         settings_path = claude_dir / "settings.json"
         with open(settings_path, "w") as f:
             json.dump(settings, f, indent=2)
+
+        # Symlink shared memory so workers can read standards and write reports.
+        # Resolves to: workspaces/<issue>/.claude/memory -> ../../.claude/memory
+        memory_link = claude_dir / "memory"
+        if not memory_link.exists():
+            memory_link.symlink_to(Path("../../.claude/memory"))
 
 
 def _ensure_log_dir() -> None:

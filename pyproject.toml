@@ -21,4 +21,4 @@ reso = "cli.main:cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["orchestrator*", "cli*"]
+include = ["orchestrator*", "cli*", "tui*"]

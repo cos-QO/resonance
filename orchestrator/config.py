@@ -33,13 +33,45 @@ class Config:
     workflow: dict
     linear_api_key: str
     linear_team_id: str
+    linear_project_id: Optional[str]
     figma_api_key: Optional[str]
     github_token: Optional[str]
+
+    # ── State names (env-overridable, set by resonance setup) ────────────────
+
+    @property
+    def state_eligibility(self) -> str:
+        return (
+            os.environ.get("LINEAR_STATE_ELIGIBILITY", "").strip()
+            or self.workflow["linear"]["eligibility_state"]
+        )
+
+    @property
+    def state_in_progress(self) -> str:
+        return os.environ.get("LINEAR_STATE_IN_PROGRESS", "").strip() or "In Progress"
+
+    @property
+    def state_feedback(self) -> str:
+        return os.environ.get("LINEAR_STATE_FEEDBACK", "").strip() or "Agent Feedback Needed"
+
+    @property
+    def state_review(self) -> str:
+        return (
+            os.environ.get("LINEAR_STATE_REVIEW", "").strip()
+            or self.workflow.get("handoff", {}).get("success", "Human Review")
+        )
+
+    @property
+    def state_return(self) -> str:
+        return (
+            os.environ.get("LINEAR_STATE_RETURN", "").strip()
+            or self.workflow.get("handoff", {}).get("failure", "Todo")
+        )
 
     # Convenience accessors
     @property
     def eligibility_state(self) -> str:
-        return self.workflow["linear"]["eligibility_state"]
+        return self.state_eligibility
 
     @property
     def max_parallel_runs(self) -> int:
@@ -65,11 +97,13 @@ class Config:
         return self.workflow["task_types"][task_type]
 
     def unsupported_config(self) -> dict:
-        return self.workflow.get("unsupported", {
+        cfg = dict(self.workflow.get("unsupported", {
             "action": "post_comment_and_return",
             "return_state": "Todo",
             "comment": "Task type not supported by orchestrator.",
-        })
+        }))
+        cfg["return_state"] = self.state_return
+        return cfg
 
 
 def load_config() -> Config:
@@ -83,11 +117,7 @@ def load_config() -> Config:
             "Run: resonance setup  to configure interactively."
         )
 
-    # Accept LINEAR_TEAM_ID (preferred) or LINEAR_PROJECT_ID (legacy name)
-    linear_team_id = (
-        os.environ.get("LINEAR_TEAM_ID", "").strip()
-        or os.environ.get("LINEAR_PROJECT_ID", "").strip()
-    )
+    linear_team_id = os.environ.get("LINEAR_TEAM_ID", "").strip()
     if not linear_team_id:
         raise ValueError(
             "LINEAR_TEAM_ID is required.\n"
@@ -95,10 +125,15 @@ def load_config() -> Config:
             "Run: resonance setup  to configure interactively."
         )
 
+    # LINEAR_PROJECT_ID now means the project UUID for issue filtering (optional).
+    # It is no longer a fallback for LINEAR_TEAM_ID.
+    linear_project_id = os.environ.get("LINEAR_PROJECT_ID", "").strip() or None
+
     return Config(
         workflow=workflow,
         linear_api_key=linear_api_key,
         linear_team_id=linear_team_id,
+        linear_project_id=linear_project_id,
         figma_api_key=os.environ.get("FIGMA_API_KEY") or None,
         github_token=os.environ.get("GITHUB_TOKEN") or None,
     )

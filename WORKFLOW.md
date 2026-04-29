@@ -67,11 +67,45 @@ plan_approval:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TASK TYPES
-# V1 scope: design and frontend only. All other issue types are rejected.
 # To add a task type: add a block here. No orchestrator code changes needed.
+# 'plan' is always checked first — plan issues are routed to the Planning Agent.
 # ─────────────────────────────────────────────────────────────────────────────
 
 task_types:
+
+  # ── pep ──────────────────────────────────────────────────────────────────────
+  # A Product Execution Prompt (PEP) document describing the full scope of a
+  # project or feature. The PEP Reader Agent reads it, creates Plan issues (in
+  # Todo for human review), sets blocking relations between plans, and posts a
+  # summary comment. Checked before 'plan' so a pep-labeled issue never falls
+  # through to the Planning Agent.
+  pep:
+    detection:
+      labels: [pep]
+    worker: claude-opus        # strongest reasoning for PEP decomposition
+    mcp:
+      - linear                 # creates issues, posts comments, reads project
+    description: |
+      Reads a PEP document from a Linear issue.
+      Creates Plan issues ([PEP-ID-P1], [PEP-ID-P2], ...) as children of the PEP issue.
+      Each Plan issue contains Blocks with tasks, acceptance criteria, and context.
+      Sets blocking relations between dependent plans.
+      Posts summary comment. Marks PEP issue Done.
+
+  # ── plan ─────────────────────────────────────────────────────────────────────
+  # A plan document describing phases, steps, and goals.
+  # The Planning Agent reads it, decomposes into phase issues, and kicks off.
+  # Human creates this in Todo (or via pd-pep skill), then moves to Plan Approved.
+  plan:
+    detection:
+      labels: [plan]
+    worker: claude-opus      # planning needs strongest reasoning
+    mcp:
+      - linear               # creates issues, posts comments, sets states
+    description: |
+      Reads the plan document and decomposes it into Linear phase issues.
+      Creates one issue per phase with correct labels, skills, and acceptance
+      criteria. Moves all phase issues to Plan Approved. Posts a summary comment.
 
   # ── design_to_code ──────────────────────────────────────────────────────────
   # Figma specification → built component or screen.
@@ -155,6 +189,50 @@ task_types:
     iteration_model: bug
     max_iterations: 3
 
+  # ── backend_feature ──────────────────────────────────────────────────────────
+  # API endpoints, services, data models, integrations.
+  backend_feature:
+    detection:
+      labels: [backend]
+      excludes: [bug]
+    skills:
+      - pd-pep
+      - pd-context-pack
+      - pd-plan-post
+      - pd-report-post
+    rules:
+      - pd-guardrail
+      - pd-issue-standard
+      - api.md
+    worker: claude-sonnet
+    mcp:
+      - linear
+    artifacts_required:
+      - test_output          # passing tests demonstrating the implementation
+    verify_level: L2
+    iteration_model: feature
+    max_iterations: 3
+
+  # ── backend_bug ───────────────────────────────────────────────────────────────
+  # Server-side defect fix. Reproduction steps and test coverage required.
+  backend_bug:
+    detection:
+      labels: [bug, backend]
+    skills:
+      - pd-pep
+      - pd-report-post
+    rules:
+      - pd-guardrail
+      - pd-issue-standard
+    worker: claude-sonnet
+    mcp:
+      - linear
+    artifacts_required:
+      - test_output
+    verify_level: L2
+    iteration_model: bug
+    max_iterations: 3
+
 # ─────────────────────────────────────────────────────────────────────────────
 # UNSUPPORTED TASK TYPES
 # Issues that do not match any task type above are rejected explicitly.
@@ -172,6 +250,8 @@ unsupported:
       design_to_code    → label: design
       frontend_feature  → label: frontend (without bug)
       frontend_bug      → labels: bug + frontend
+      backend_feature   → label: backend (without bug)
+      backend_bug       → labels: bug + backend
 
     To enable orchestration: add the appropriate label and move the issue
     back to Plan Approved once a plan has been reviewed and approved.
@@ -313,7 +393,7 @@ retry:
 
 polling:
   # How often the orchestrator checks Linear for newly eligible issues.
-  interval_seconds: 60
+  interval_seconds: 15
 
   # Reconciliation: how often to check that active runs still match Linear state.
   reconcile_interval_seconds: 120

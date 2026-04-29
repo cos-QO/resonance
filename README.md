@@ -12,6 +12,8 @@ Resonance is a supervised agentic delivery pipeline. It polls a Linear team for 
 
 3. Within 15 seconds, the orchestrator picks up the issue. It re-fetches it from Linear to confirm the state is still Plan Approved (fail-closed), creates a git worktree at `workspaces/<issue-id>/` on branch `agent/<issue-id>`, writes a `.claude/settings.json` pointing at shared plugin directories, and launches `claude -p "<prompt>" --output-format stream-json --permission-mode bypassPermissions`. Linear moves to **In Progress** and the `RES` label is added.
 
+   Workers are QO-specialized: each prompt opens with a task-type persona ("QO Frontend Engineer", "QO Project Manager", etc.) and a numbered skills workflow listing which slash commands to use. All 40+ cc-qo-skills are available (`/connectui-dev`, `/verify`, `/qo-prototype`, `/qo-pr`, `/review`, etc.). Workers read the Queen One design system tokens (`connectui-design-system.md`) and stack reference (`connectui-stack.md`) via a shared memory symlink in every worktree.
+
 4. The agent works inside the worktree. If it needs a human decision, it writes to stdout:
    ```
    AGENT_SIGNAL: {"type": "human_input_needed", "question": "...", "context": "..."}
@@ -81,7 +83,7 @@ Agents that exit without emitting a signal are treated as failures and retried u
 | `q` | Quit (also stops the orchestrator) |
 | `r` | Refresh state from disk |
 | `l` | Refresh Linear pipeline view |
-| `p` | Set or change project scope |
+| `p` | Set or change project scope (archives current session first) |
 | `Tab` | Cycle run selection (shows `>` prefix) |
 | `Enter` | Open detail modal for selected run |
 | `f` | Send feedback to selected agent |

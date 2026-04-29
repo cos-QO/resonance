@@ -14,6 +14,7 @@ The goal is not full autonomy. The goal is a supervised operating system where a
 
 ## Documents
 
+- [PEP to Execution Design](./pep-to-execution-design.md) ← **start here for the PEP flow**
 - [Project Overview](./project-overview.md)
 - [System Architecture](./system-architecture.md)
 - [Workflow and Approval Model](./workflow-and-approval-model.md)

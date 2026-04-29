@@ -14,7 +14,7 @@ COMMANDS_PATH = Path("runs/commands.jsonl")
 
 _lock = threading.Lock()
 
-ACTIVE_STATUSES = {"running", "paused", "waiting_human"}
+ACTIVE_STATUSES = {"running", "paused", "waiting_human", "needs_input"}
 TERMINAL_STATUSES = {"failed", "complete", "archived"}
 
 
@@ -89,6 +89,26 @@ def get_active_runs() -> dict[str, dict]:
 def get_all_runs() -> dict[str, dict]:
     with _lock:
         return _load()
+
+
+def clear_session(clear_events: bool = True) -> dict:
+    """Clear completed/failed runs and optionally wipe the event log.
+    Returns {"runs_removed": N, "events_cleared": bool}."""
+    with _lock:
+        data = _load()
+        before = len(data)
+        data = {k: v for k, v in data.items() if v["status"] not in TERMINAL_STATUSES}
+        _save(data)
+        removed = before - len(data)
+
+    events_cleared = False
+    if clear_events:
+        events_path = STATE_PATH.parent / "events.jsonl"
+        if events_path.exists():
+            events_path.write_text("")
+            events_cleared = True
+
+    return {"runs_removed": removed, "events_cleared": events_cleared}
 
 
 # ── Command queue (CLI → orchestrator communication) ──────────────────────────

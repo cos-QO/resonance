@@ -81,7 +81,16 @@ Stall detection: `is_stalled(stall_seconds)` compares `time.monotonic()` against
 
 **Plan issues** receive a different prompt from `orchestrator/planner.py`. The Planning Agent uses the Linear MCP tools to create phase issues, moves them to Plan Approved, writes a `plan.md` to local memory, posts a summary comment on the parent, and emits `plan_decomposed`.
 
-**Execution issues** receive the prompt from `runner.build_prompt()`. The prompt contains: issue title/description, task type, iteration number, required artifacts list, the handoff protocol (where to write `runs/memory/<issue-id>/handoffs/iter-N.md`), instructions to update the Linear issue description and post a structured review comment before signalling, and the AGENT_SIGNAL specification.
+**Execution issues** receive the prompt from `runner.build_prompt()`. The prompt contains:
+
+1. **Agent persona** — task-type-specific role declaration (see [QO Worker Context](#qo-worker-context)).
+2. **Issue details** — title, description, task type, iteration number.
+3. **Skills Available** — numbered list of available slash-command skills with workflow guidance for this task type.
+4. **Prior Feedback** — accumulated human feedback from previous iterations (iteration > 1).
+5. **Required Artifacts** — list of artifacts the agent must produce.
+6. **Handoff Protocol** — where to write `runs/memory/<issue-id>/handoffs/iter-N.md`.
+7. **Before Signalling** — instructions to update the Linear issue description and post a structured review comment before any AGENT_SIGNAL.
+8. **Signal Protocol** — exact format for `human_input_needed` and `ready_for_review`.
 
 On retry (`_retry_run()`), the prompt also includes `prior_feedback` (all accumulated feedback texts) and a `memory_brief` string loaded from `runs/memory/<issue-id>/` by `orchestrator/memory.py`.
 
@@ -121,14 +130,17 @@ All actions (approve, feedback, abort) write to `runs/commands.jsonl` via `orche
 
 Labels are applied in Linear before moving an issue to Plan Approved. They determine task type, which controls the agent's skills, MCP servers, and required artifacts.
 
-| Label(s) | Task type | Worker | Key skills | Required artifacts |
-|---|---|---|---|---|
-| `plan` | plan | claude-opus | Linear MCP | (signal: plan_decomposed) |
-| `design` | design_to_code | claude-sonnet | connectui-dev, pd-pep, pd-plan-post | preview_url, figma_comparison |
-| `frontend` (no `bug`) | frontend_feature | claude-sonnet | connectui-dev, pd-pep, pd-plan-post | preview_url |
-| `frontend` + `bug` | frontend_bug | claude-sonnet | connectui-dev, pd-pep | preview_url, before_after_evidence |
-| `backend` (no `bug`) | backend_feature | claude-sonnet | pd-pep, pd-plan-post | test_output |
-| `backend` + `bug` | backend_bug | claude-sonnet | pd-pep | test_output |
+Classification priority: `pep` → `plan` → all other types. The first match wins.
+
+| Label(s) | Task type | Agent | Worker | Key skills | Required artifacts |
+|---|---|---|---|---|---|
+| `pep` | pep | PEP Reader Agent | claude-opus | Linear MCP | (signal: pep_decomposed) |
+| `plan` | plan | Planning Agent | claude-opus | Linear MCP | (signal: plan_decomposed) |
+| `design` | design_to_code | Frontend Engineer | claude-sonnet | connectui-dev, pd-pep, pd-plan-post | preview_url, figma_comparison |
+| `frontend` (no `bug`) | frontend_feature | Frontend Engineer | claude-sonnet | connectui-dev, pd-pep, pd-plan-post | preview_url |
+| `frontend` + `bug` | frontend_bug | Frontend Engineer | claude-sonnet | connectui-dev, pd-pep | preview_url, before_after_evidence |
+| `backend` (no `bug`) | backend_feature | Backend Engineer | claude-sonnet | pd-pep, pd-plan-post | test_output |
+| `backend` + `bug` | backend_bug | Backend Engineer | claude-sonnet | pd-pep | test_output |
 
 The `RES` label is added automatically by the orchestrator when a run starts. It marks issues under orchestrator management.
 
@@ -137,6 +149,23 @@ Issues with no recognized label combination cause the orchestrator to post a com
 ---
 
 ## Run Lifecycle
+
+### PEP issues
+
+A PEP (Product Execution Prompt) is the top-level document for a project or feature. It lives in a Linear project named `[PEP] <title>` as a single issue with the `pep` label.
+
+1. Human writes the PEP (manually or via `/pd-pep` skill) and moves it to Plan Approved.
+2. Orchestrator classifies as `pep` (highest priority, checked before `plan`), posts a "PEP Reader Agent started" comment, sets Linear → In Progress.
+3. PEP Reader Agent (claude-opus) runs in a worktree. It:
+   - Reads the PEP description and all comments on the issue (comments may contain human clarifications added after the initial write)
+   - For each Plan defined in the PEP `## Plans` section, creates a child issue titled `[<PEP-ID>-P<N>] Title` (e.g. `[RND-22-P1] Auth Backend API`) using the Linear MCP tool
+   - Plan issues are created in **Todo** state — human must review and approve each one before execution starts
+   - Writes `runs/memory/<issue-id>/plan.md` with the decomposition summary and sequencing rationale
+   - Posts a `[PM]` self-comment on each Plan issue explaining scope and block order
+   - Posts a summary comment on the PEP issue listing all Plans and sequencing
+4. Agent emits: `AGENT_SIGNAL: {"type": "pep_decomposed", "pep_id": "...", "plans": [{"id": "...", "identifier": "...", "title": "...", "blocked_by_ids": [...]}]}`
+5. Orchestrator: wires Linear blocking relations between Plan issues (from `blocked_by_ids` in the signal), marks PEP issue → Done, persists plan metadata to `runs/memory/<issue-id>/plans.json`.
+6. Human reviews Plan issues. When satisfied, moves each to Plan Approved. Resonance picks them up automatically in dependency order.
 
 ### Plan issues
 
@@ -158,6 +187,23 @@ Issues with no recognized label combination cause the orchestrator to post a com
 6. If `waiting_human` (Human Review): human reviews the branch. To accept, move to Done. To request changes, add a comment in Linear and move to Agent Feedback Needed — the orchestrator detects this the same as step 5.
 7. On Done: reconciliation kills any active runner (if applicable), archives the local run, removes the worktree.
 
+### Dependency hold / release flow
+
+Before starting any run, `_start_run()` calls `_check_active_blockers()`, which reads `inverseRelations` from the issue fetched by the fail-closed `get_issue()` call. A blocker is "active" if its Linear state is not `Done` or `Cancelled`.
+
+If active blockers exist:
+1. The issue is skipped for this tick.
+2. On the first skip, `_handle_blocked()` posts a `[PM]` comment on the issue: "⏸ Waiting for [IDENTIFIER] — will start automatically when dependencies are Done."
+3. Subsequent skips are silent (no duplicate comments).
+4. `_blocked_notified` (a set on the Poller object) tracks which issues have already received the comment; it resets on orchestrator restart.
+
+When the blocker reaches Done on a later poll:
+1. `_check_active_blockers()` returns empty.
+2. If the issue was in `_blocked_notified`, a `[PM]` comment is posted: "▶️ All dependencies resolved. Starting execution now."
+3. The run proceeds normally.
+
+Blocking relations are set by the orchestrator (not the agent) in `_finish_pep_decomposed()` by calling `linear_client.create_issue_relation()` for each `blocked_by_ids` entry from the `pep_decomposed` signal.
+
 ### Needs Input blocker flow (mid-task)
 
 The `human_input_needed` signal can fire at any point during agent execution, not only at the end. The agent emits it, the runner records it as `_last_signal`, and when the process exits (because the agent stops after asking), `_handle_result` routes to the needs_input path. The run remains in `needs_input` status until the human moves the Linear issue to Agent Feedback Needed.
@@ -175,9 +221,10 @@ This runs on every line regardless of whether the line is valid stream-json. The
 
 | Signal | Fields | Orchestrator action |
 |---|---|---|
-| `human_input_needed` | `question` (str), `context` (str) | `run_state.update_run(status="needs_input", pending_question=...)` → on exit: Linear → Agent Feedback Needed, comment posted |
-| `ready_for_review` | `summary` (str), `artifacts` (dict with `preview_url` etc.) | `run_state.update_run(status="waiting_human", artifacts=...)` → on exit: Linear → Human Review, comment posted |
+| `pep_decomposed` | `pep_id` (str), `plans` (list of `{id, identifier, title, blocked_by_ids}`) | Linear blocking relations created between plans; PEP issue → Done; plans metadata written to `runs/memory/<id>/plans.json` |
 | `plan_decomposed` | `plan_id` (str), `phases` (list of `{id, identifier, title}`) | Local run → `complete`, issue → Done in Linear, phases written to memory |
+| `ready_for_review` | `summary` (str), `artifacts` (dict with `preview_url` etc.) | `run_state.update_run(status="waiting_human", artifacts=...)` → on exit: Linear → Human Review, comment posted |
+| `human_input_needed` | `question` (str), `context` (str) | `run_state.update_run(status="needs_input", pending_question=...)` → on exit: Linear → Agent Feedback Needed, comment posted |
 
 The signal is handled in two places: `Runner._handle_signal()` updates local run state immediately when the signal is detected mid-stream; `Poller._handle_result()` drives the Linear state transition after the process exits.
 
@@ -194,7 +241,7 @@ All statuses are stored per-issue in `runs/state.json`. The file is written atom
 | `waiting_human` | Agent emitted `ready_for_review`; Linear shows Human Review |
 | `needs_input` | Agent emitted `human_input_needed`; Linear shows Agent Feedback Needed |
 | `failed` | Max attempts reached, or aborted by operator |
-| `complete` | Plan decomposition succeeded cleanly |
+| `complete` | PEP or Plan decomposition succeeded cleanly |
 | `archived` | Run reconciled-stopped because Linear moved to Done/Cancelled |
 
 `ACTIVE_STATUSES = {"running", "paused", "waiting_human", "needs_input"}` — runs in these states are shown in the TUI and processed by the orchestrator.
@@ -209,12 +256,45 @@ running → waiting_human   (ready_for_review signal)
 running → needs_input     (human_input_needed signal)
 running → paused          (pause command)
 running → failed          (max attempts, abort, linear state error)
-running → complete        (plan_decomposed signal)
+running → complete        (pep_decomposed or plan_decomposed signal)
 waiting_human → running   (approve command or Human Review → Agent Feedback Needed detected)
 needs_input → running     (Agent Feedback Needed detected in Linear)
 paused → running          (approve command)
 running/waiting_human/paused → archived   (reconciliation: Linear moved to Done/Cancelled)
 ```
+
+---
+
+## Naming Convention
+
+Linear auto-assigns numeric identifiers (e.g. `RND-22`). Issue hierarchy is communicated through **title prefixes**, not Linear parent/child structure alone:
+
+| Level | Title format | Example |
+|---|---|---|
+| PEP issue | `[PEP] <title>` *(project name)* | Project: `[PEP] User Authentication` |
+| PEP issue | no prefix needed on the issue itself | Issue title: `User Authentication PEP` |
+| Plan issue | `[<PEP-ID>-P<N>] <title>` | `[RND-22-P1] Auth Backend API` |
+| Block issue | `[<PEP-ID>-P<N>-B<N>] <title>` | `[RND-22-P1-B1] User model + migration` |
+
+Where `RND-22` is the Linear identifier of the **PEP issue** (not the project).
+
+This means any agent or human reading an issue title immediately understands its place in the work tree. Searching Linear for `RND-22` returns the full work tree for that PEP.
+
+Block issues are created by the Execution Agent during a Plan run, not by the PEP Reader Agent. The PEP Reader Agent only creates Plan issues.
+
+---
+
+## PM Self-Commentary
+
+Agents post `[PM]` prefixed comments at key moments. These are distinguishable from status updates and survive between agent iterations, giving any future agent or human a readable audit trail:
+
+| Moment | Who posts | Content |
+|---|---|---|
+| Plan issue created | PEP Reader Agent | `[PM] Created from PEP RND-22. Plan P1 of 2. Blocks: B1→B2. Rationale: ...` |
+| Plan blocked at pickup | Orchestrator | `[PM] ⏸ Waiting for [RND-30] — will start automatically when it reaches Done.` |
+| Blocked plan unblocked | Orchestrator | `[PM] ▶️ All dependencies resolved. Starting execution now. Previously waiting on: RND-30` |
+
+The "blocked" comment is posted only once per orchestrator session (tracked by `_blocked_notified` set on the Poller). Subsequent polls that are still blocked are silent to avoid comment noise.
 
 ---
 
@@ -250,11 +330,102 @@ For each new run, `WorkspaceManager.create()` does the following:
    }
    ```
 
-3. The `claude` command adds `--permission-mode bypassPermissions`, so the agent operates without interactive permission prompts.
+3. Creates `workspaces/<issue-id>/.claude/memory` as a symlink → `../../.claude/memory`. This gives the worker read/write access to the shared project memory at the `/.claude/memory/` path that plugin skills expect. Specifically, `.claude/memory/standards/connectui-design-system.md` and `.claude/memory/standards/connectui-stack.md` become readable as `/.claude/memory/standards/...` inside the worker session.
+
+4. The `claude` command adds `--permission-mode bypassPermissions`, so the agent operates without interactive permission prompts.
 
 The plugin dirs point at the shared `cc-pipeline` and `cc-qo-skills` directories relative to the worktree root. The MCP config (`../../.mcp.json`) connects the Linear, Context7, and Figma MCP servers to the agent session.
 
 Worktrees are removed when the issue reaches Done or Cancelled (detected by `_reconcile()`). They are also removed explicitly on `resonance abort` if the `--cleanup` flag is passed (the abort command marks the run failed; the worktree itself is left for inspection by default).
+
+---
+
+## QO Worker Context
+
+Resonance workers are specialized for Queen One's ConnectUI project. Three mechanisms ensure every worker understands the codebase, design system, and expected workflow before it writes a single line of code.
+
+### Agent Personas
+
+`build_prompt()` opens every prompt with a role declaration based on the task type (`classifier.py` injects `_name` into the `task_cfg` dict):
+
+| Task type | Persona |
+|-----------|---------|
+| `plan` | QO Project Manager / Planning Agent |
+| `design_to_code` | QO Frontend Engineer (Design-to-Code) |
+| `frontend_feature` | QO Frontend Engineer |
+| `frontend_bug` | QO Frontend Engineer (Bug Investigation) |
+| `backend_feature` | QO Backend Engineer |
+| `backend_bug` | QO Backend Engineer (Bug Investigation) |
+
+### Skills Available
+
+After the issue description, the prompt lists all slash-command skills for the task type with a numbered execution workflow. Example for `frontend_feature`:
+
+```
+## Skills Available
+
+The following slash-command skills are loaded and ready. Invoke them in the order shown:
+
+1. /pd-pep — extract structured requirements from the Linear issue
+2. /pd-context-pack — gather broad project awareness before starting work
+3. /connectui-dev — prime yourself with ConnectUI design system + code standards
+4. /pd-plan-post — post implementation plan to Linear for human approval
+5. /pd-report-post — post execution report to Linear on completion
+
+Recommended workflow for this task type:
+1. /pd-pep — read and structure requirements from the issue
+2. /connectui-dev <task> — start implementation in ConnectUI mode
+3. /verify L2 — run build + lint + tests
+4. /qo-pr — generate PR description
+5. /pd-report-post — post execution report to Linear
+```
+
+Skills come from two plugin directories loaded into every worker session:
+
+**cc-pipeline** (`.claude/cc-pipeline/`) — delivery workflow skills:
+- `/pd-pep` — structured requirements extraction from Linear issue
+- `/pd-context-pack` — broad codebase awareness before implementation
+- `/pd-plan-post` — post implementation plan to Linear for human approval
+- `/pd-report-post` — post execution report to Linear on completion
+- `/pd-github-pr` — open a GitHub PR linked to the Linear issue
+
+**cc-qo-skills** (`.claude/cc-qo-skills/` — symlink to the real module) — ConnectUI implementation skills:
+- `/connectui-dev <task>` — loads ConnectUI design system + stack standards, queries Context7 MCP for latest TanStack/MUI docs, optionally queries Figma MCP if a design URL is provided, then primes the developer with all QO conventions
+- `/verify L1|L2|L3` — automated quality pipeline: build validation, static analysis, unit tests, integration tests, security scan, code coverage
+- `/qo-prototype <figma-url>` — Figma-to-code: fetches design via Figma MCP, maps to Orion components and Queen palette tokens, generates production-quality ConnectUI code with Storybook stories
+- `/qo-component <Name>` — scaffolds a new Orion/MUI component with matching Storybook story
+- `/qo-pr` — generates a ConnectUI-standard PR description from the current git diff
+- `/qo-bug` — structured bug investigation workflow
+- `/review` — deep code review: correctness, style, security, performance
+- `/react-dev`, `/typescript-dev` — React and TypeScript specialization skills
+
+### Design System Reference
+
+Two authoritative reference files are always accessible to workers via the `.claude/memory` symlink:
+
+**`.claude/memory/standards/connectui-design-system.md`** — extracted directly from connect-ui design token source files:
+- All color tokens with exact hex values (primary = violet[400] = `#7700EE`, secondary = pink[400] = `#EC407A`)
+- Custom spacing scale (ConnectUI uses a non-standard scale — `spacing(3)` = 8px, not the default MUI 8px baseline)
+- Shape tokens (border radii: none/sm=4/md=8/lg=16/buttonCorner=200px)
+- Typography (Poppins for body/inputs, Cabinet Grotesk for labels; 12 font sizes, 5 weights)
+- All 8 Orion component names, file locations, and prop signatures
+- MUI component list (re-exports in `src/orion/MuiComponents/`)
+- Key conventions (no barrel imports, integer spacing only, shouldForwardProp, MUI v7 slotProps)
+
+**`.claude/memory/standards/connectui-stack.md`** — technology stack reference:
+- Core stack: React 18, MUI v7, TypeScript strict, pnpm, Vite
+- Routing: TanStack Router v1 (file-based, `src/routes/`)
+- Data: TanStack Query v5 (server state), TanStack Form v1 + Zod (forms), Zustand + Immer (client state)
+- State hierarchy (React Query → cache → useState → Form → Zustand)
+- Anti-patterns to avoid (no Context API for server state, no Redux, no prop drilling >2 levels)
+- Auth pattern: pathless layout route `_auth.tsx` with `beforeLoad` guard
+
+To refresh these files when connect-ui ships new tokens:
+```bash
+python3 scripts/sync-design-system.py
+```
+
+The sync script fetches design token source files directly from the GitHub repo and regenerates the markdown reference. Run with `--check` to verify if the local copy is stale.
 
 ---
 

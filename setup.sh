@@ -22,26 +22,43 @@ dim()    { echo -e "${DIM}$*${RESET}"; }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+VENV_DIR="$PWD/.venv"
+
 find_python() {
   for cmd in python3.13 python3.12 python3.11; do
     if command -v "$cmd" &>/dev/null; then
-      echo "$cmd"; return 0
+      ver=$("$cmd" -c "import sys; print(sys.version_info >= (3,11))" 2>/dev/null)
+      if [[ "$ver" == "True" ]]; then
+        echo "$cmd"; return 0
+      fi
     fi
   done
   fail "Python 3.11+ not found. Install via: brew install python@3.11"
   exit 1
 }
 
+ensure_venv() {
+  local py
+  py=$(find_python)
+  if [[ ! -d "$VENV_DIR" ]]; then
+    info "Creating virtual environment..."
+    "$py" -m venv "$VENV_DIR"
+    ok "Created .venv"
+  fi
+  # Prepend venv to PATH so 'resonance' and 'python3' resolve to venv versions
+  export PATH="$VENV_DIR/bin:$PATH"
+}
+
 ensure_resonance() {
+  ensure_venv
   if ! command -v resonance &>/dev/null; then
     info "Installing resonance..."
-    PYTHON=$(find_python)
-    "$PYTHON" -m pip install -e . -q
+    "$VENV_DIR/bin/python" -m pip install -e . -q
     ok "Installed"
   fi
 }
 
-# Update or insert a key=value in .env using Python (portable across macOS/Linux)
+# Update or insert a key=value in .env (uses stdlib only — works with any Python)
 set_env_key() {
   local key="$1" value="$2"
   python3 - "$key" "$value" <<'PYEOF'
@@ -87,7 +104,7 @@ do_overwrite() {
 }
 
 do_update() {
-  header "Update API Keys"
+  header "Update Configuration"
 
   if [[ ! -f .env ]]; then
     fail ".env not found — run ./setup.sh first."
@@ -96,16 +113,16 @@ do_update() {
 
   ensure_resonance
 
-  KEYS=("LINEAR_API_KEY" "LINEAR_PROJECT_ID" "FIGMA_API_KEY" "GITHUB_TOKEN")
+  KEYS=("LINEAR_API_KEY" "LINEAR_TEAM_ID" "FIGMA_API_KEY" "GITHUB_TOKEN")
   DESCS=(
     "Linear personal API key  (Settings → API → Personal API keys)"
-    "Linear project UUID      (from resonance setup or your Linear project URL)"
+    "Linear team UUID         (from resonance setup or your Linear team URL)"
     "Figma API key            (optional — required for design_to_code tasks)"
     "GitHub token             (optional — required for PR creation, Milestone 3)"
   )
 
   while true; do
-    echo -e "${BOLD}Which key would you like to update?${RESET}"
+    echo -e "${BOLD}What would you like to update?${RESET}"
     for i in "${!KEYS[@]}"; do
       current=$(get_env_key "${KEYS[$i]}")
       masked="${current:0:8}…"
@@ -114,6 +131,8 @@ do_update() {
       printf "       %-22s  current: %s\n" "" "${DIM}${masked}${RESET}"
       echo ""
     done
+    echo -e "  5)  ${BOLD}Fix Linear labels / states${RESET}  ${DIM}Create missing 'plan', 'backend', and other required items${RESET}"
+    echo ""
     echo -e "  q)  Done\n"
     read -rp "Choice: " choice
     echo ""
@@ -132,11 +151,18 @@ do_update() {
         fi
         echo ""
         ;;
+      5)
+        echo ""
+        info "Creating missing Linear labels and workflow states..."
+        echo ""
+        resonance fix
+        echo ""
+        ;;
       q|Q|"")
         break
         ;;
       *)
-        warn "Invalid choice — enter 1–4 or q."
+        warn "Invalid choice — enter 1–5 or q."
         echo ""
         ;;
     esac
