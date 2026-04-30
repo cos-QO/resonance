@@ -13,6 +13,12 @@ Block issues (is_block=True, project scoped):
   The orchestrator updates ISSUE_ID (and ISSUE_PATH) in .claude/settings.json each time a new
   block starts; MAIN_PATH always points to the shared worktree root.
 
+Multi-repo support (CONNECT_UI_PATH):
+  When target_repo_path is provided to create()/remove(), git worktree commands run
+  inside that external repo (cwd=target_repo_path). The worktrees still land in
+  workspaces/ under the agentic-pipeline directory but branch off the external repo's
+  HEAD. This lets frontend agents work in the real connect-ui codebase.
+
 The project_slug is the Linear project name slugified (spaces/punctuation → hyphens).
 The orchestrator writes a minimal .claude/settings.json into each worktree.
 """
@@ -49,9 +55,18 @@ class WorkspaceManager:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def create(self, issue_id: str, is_block: bool = False) -> Path:
+    def create(
+        self,
+        issue_id: str,
+        is_block: bool = False,
+        target_repo_path: Optional[str] = None,
+    ) -> Path:
         """
         Create a workspace for issue_id.
+
+        target_repo_path: when set, git worktree commands run inside that external
+          repo (e.g. connect-ui). The worktree still lands under workspaces/ here
+          but its file tree comes from the external repo's HEAD.
 
         For blocks (is_block=True, project scoped):
           - Returns the shared main/ worktree path (creates it on first call).
@@ -63,9 +78,9 @@ class WorkspaceManager:
           - Idempotent: returns existing path if already created.
         """
         if is_block and self._project_slug:
-            return self._create_block(issue_id)
+            return self._create_block(issue_id, target_repo_path=target_repo_path)
 
-        # Non-block (or no project slug): legacy per-issue worktree
+        # Non-block (or no project slug): per-issue worktree
         path = self._path(issue_id)
         branch = self._branch(issue_id)
 
@@ -76,15 +91,22 @@ class WorkspaceManager:
         path.parent.mkdir(parents=True, exist_ok=True)
         if self._project_slug:
             self._ensure_project_root()
-        self._git_worktree_add(path, branch)
-        self._write_agent_config(path, issue_id)
+        self._git_worktree_add(path, branch, target_repo_path=target_repo_path)
+        self._write_agent_config(path, issue_id, target_repo_path=target_repo_path)
         _ensure_log_dir()
 
-        write_event(issue_id, "workspace_created", path=str(path), branch=branch)
-        logger.info("workspace created issue=%s path=%s branch=%s", issue_id, path, branch)
+        write_event(issue_id, "workspace_created", path=str(path), branch=branch,
+                    external_repo=bool(target_repo_path))
+        logger.info("workspace created issue=%s path=%s branch=%s external=%s",
+                    issue_id, path, branch, bool(target_repo_path))
         return path
 
-    def remove(self, issue_id: str, is_block: bool = False) -> None:
+    def remove(
+        self,
+        issue_id: str,
+        is_block: bool = False,
+        target_repo_path: Optional[str] = None,
+    ) -> None:
         """
         Remove the workspace for issue_id.
 
@@ -115,8 +137,9 @@ class WorkspaceManager:
             return
 
         try:
-            _run(["git", "worktree", "remove", "--force", str(path)])
-            _run(["git", "branch", "-D", branch])
+            _run(["git", "worktree", "remove", "--force", str(path)],
+                 cwd=target_repo_path)
+            _run(["git", "branch", "-D", branch], cwd=target_repo_path)
             write_event(issue_id, "workspace_removed", path=str(path))
             logger.info("workspace removed issue=%s", issue_id)
         except subprocess.CalledProcessError as e:
@@ -140,7 +163,11 @@ class WorkspaceManager:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    def _create_block(self, issue_id: str) -> Path:
+    def _create_block(
+        self,
+        issue_id: str,
+        target_repo_path: Optional[str] = None,
+    ) -> Path:
         """Create or reuse the shared main/ worktree for block issues."""
         main_path = self._base / self._project_slug / "main"
         issue_path = self._base / self._project_slug / "issues" / issue_id
@@ -155,6 +182,7 @@ class WorkspaceManager:
                 main_path, issue_id,
                 issue_path=issue_path,
                 main_path=main_path,
+                target_repo_path=target_repo_path,
             )
             write_event(issue_id, "workspace_ready", path=str(main_path), branch=branch)
             logger.info("shared workspace ready issue=%s main=%s", issue_id, main_path)
@@ -162,16 +190,19 @@ class WorkspaceManager:
 
         # First block for this project — create the shared worktree
         self._ensure_project_root()
-        self._git_worktree_add(main_path, branch)
+        self._git_worktree_add(main_path, branch, target_repo_path=target_repo_path)
         self._write_agent_config(
             main_path, issue_id,
             issue_path=issue_path,
             main_path=main_path,
+            target_repo_path=target_repo_path,
         )
         _ensure_log_dir()
 
-        write_event(issue_id, "workspace_created", path=str(main_path), branch=branch)
-        logger.info("shared workspace created issue=%s main=%s branch=%s", issue_id, main_path, branch)
+        write_event(issue_id, "workspace_created", path=str(main_path), branch=branch,
+                    external_repo=bool(target_repo_path))
+        logger.info("shared workspace created issue=%s main=%s branch=%s external=%s",
+                    issue_id, main_path, branch, bool(target_repo_path))
         return main_path
 
     @staticmethod
@@ -201,13 +232,21 @@ class WorkspaceManager:
         naming = self._config.workflow["workspace"]["branch_naming"]
         return naming.format(issue_id=issue_id)
 
-    def _git_worktree_add(self, path: Path, branch: str) -> None:
-        # Create branch from HEAD; --orphan would lose shared history
+    def _git_worktree_add(
+        self,
+        path: Path,
+        branch: str,
+        target_repo_path: Optional[str] = None,
+    ) -> None:
+        # When target_repo_path is set, git runs inside the external repo.
+        # Path must be absolute so it resolves correctly from that cwd.
+        abs_path = str(path.resolve())
+        cwd = target_repo_path  # None → current working dir (agentic-pipeline)
         try:
-            _run(["git", "worktree", "add", "-b", branch, str(path), "HEAD"])
+            _run(["git", "worktree", "add", "-b", branch, abs_path, "HEAD"], cwd=cwd)
         except subprocess.CalledProcessError:
             # Branch may already exist from a prior failed attempt — try without -b
-            _run(["git", "worktree", "add", str(path), branch])
+            _run(["git", "worktree", "add", abs_path, branch], cwd=cwd)
         _write_worktree_gitignore(path)
 
     def _write_agent_config(
@@ -216,14 +255,15 @@ class WorkspaceManager:
         issue_id: str,
         issue_path: Optional[Path] = None,
         main_path: Optional[Path] = None,
+        target_repo_path: Optional[str] = None,
     ) -> None:
         """
         Write a minimal .claude/settings.json into the worktree.
         Uses absolute paths for plugin dirs so depth doesn't matter.
 
-        For block workspaces, also injects ISSUE_PATH and MAIN_PATH env vars
-        so the agent knows where its local scratch space is and where the shared
-        codebase lives.
+        For block workspaces, also injects ISSUE_PATH and MAIN_PATH env vars.
+        When target_repo_path is set, injects CONNECT_UI_PATH so the agent
+        knows where the external codebase root is.
         """
         claude_dir = worktree_path / ".claude"
         claude_dir.mkdir(exist_ok=True)
@@ -240,6 +280,10 @@ class WorkspaceManager:
             env["ISSUE_PATH"] = str(issue_path)
         if main_path is not None:
             env["MAIN_PATH"] = str(main_path)
+        if target_repo_path is not None:
+            # Agent is working in a worktree of the external repo.
+            # CONNECT_UI_PATH points to the external repo root for reference.
+            env["CONNECT_UI_PATH"] = target_repo_path
 
         settings = {
             "pluginDirs": plugin_dirs,
@@ -326,5 +370,5 @@ def _ensure_log_dir() -> None:
     Path("runs/logs").mkdir(parents=True, exist_ok=True)
 
 
-def _run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+def _run(cmd: list[str], cwd: Optional[str] = None) -> None:
+    subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=cwd)
