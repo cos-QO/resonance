@@ -212,10 +212,12 @@ Plan 2: [title] (depends on Plan 1)
 
 ## Step 5 — Post summary comment on PEP issue
 
-Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`:
+Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`.
+Before posting, run `date -u +%H:%M` in Bash and compute the elapsed minutes
+since your start to fill in `<elapsed>`.
 
 ```
-📋 Core Plan created — [N] plan(s), [M] block(s) total
+📋 Core Plan created — [N] plan(s), [M] block(s) total  · <elapsed> elapsed
 
 Core Plan: [identifier] → [title] (awaiting your review in Human Review)
 
@@ -250,6 +252,7 @@ def build_core_plan_prompt(issue: dict, config: Config) -> str:
     Reads an approved Core Plan, creates Block sub-issues with full context,
     sets blocking relations, moves blocks to Plan Approved, signals blocks_created.
     """
+    from datetime import datetime, timezone
     issue_id    = issue.get("identifier", issue["id"])
     issue_uuid  = issue["id"]
     title       = issue.get("title", "")
@@ -257,6 +260,7 @@ def build_core_plan_prompt(issue: dict, config: Config) -> str:
     team_id     = config.linear_team_id
     project_id  = config.linear_project_id or ""
     eligibility = config.eligibility_state
+    started_at  = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
     return f"""\
 # Block Decomposer Agent — {issue_id}: {title}
@@ -361,10 +365,11 @@ To get the state ID, call `mcp__linear__linear_search_issues_by_identifier` on
 
 ## Step 6 — Post summary comment on Core Plan
 
-Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`:
+Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`.
+Before posting, run `date -u +%H:%M` in Bash and compute elapsed minutes since {started_at}.
 
 ```
-📦 [{issue_id}] decomposed — [N] blocks created and queued for execution
+📦 [{issue_id}] decomposed — [N] blocks created and queued  · <elapsed> elapsed
 
 Parallel blocks (start simultaneously):
   [B1-identifier]: [title]
@@ -373,7 +378,7 @@ Parallel blocks (start simultaneously):
 Sequential blocks (wait for dependency):
   [B3-identifier]: [title] — blocked by B1 (starts when B1 is Done)
 
-Each block will be implemented and self-verified by an agent, then sent to Human Review.
+Each block will be implemented and self-verified by an agent, then moved to Human Review.
 ```
 
 ---
@@ -397,10 +402,12 @@ Do not end this session without emitting this signal.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_block_execution_prompt(issue: dict, task_cfg: dict) -> str:
+    from datetime import datetime, timezone
     issue_id    = issue.get("identifier", issue["id"])
     issue_uuid  = issue["id"]
     title       = issue.get("title", "")
     description = (issue.get("description", "") or "").strip()
+    started_at  = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
     return f"""\
 # Block Execution Agent — {issue_id}: {title}
@@ -431,9 +438,10 @@ For each task in the **Tasks** section:
    - Update via `mcp__linear__linear_bulk_update_issues` with `ids: ["{issue_uuid}"]` and the updated description
 4. Post a brief comment via `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`:
    ```
-   ✅ Task done: <task name>
+   ✅ Task done: <task name>  · <elapsed, e.g. "4 min in">
    <What you did — 1-2 sentences. Key decisions or findings only.>
    ```
+   Compute elapsed time from your start time ({started_at}) using `date -u +%H:%M` in Bash.
 
 ### Step 3 — Self-verify
 
@@ -503,7 +511,9 @@ You cannot write to Figma; it is read-only reference material.
 ## Rules
 - Never signal block_complete unless every task checkbox is checked and every criterion verified
 - Keep commits atomic — one logical change per commit
-- Post a "Starting block {issue_id}" comment as your very first action
+- Your very first action: post a comment with `issueId: "{issue_uuid}"` and body:
+  `▶️ Starting block {issue_id}  · started {started_at}`
+- Include elapsed time (from {started_at}) in every subsequent comment you post
 """
 
 

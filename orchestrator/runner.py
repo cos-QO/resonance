@@ -323,10 +323,12 @@ def build_prompt(
     memory_brief: Optional[str] = None,
 ) -> str:
     """Assemble the prompt sent to Claude for a given issue + iteration."""
+    from datetime import datetime, timezone
     issue_id  = issue.get("identifier", issue["id"])
     title     = issue.get("title", "")
     description = issue.get("description", "") or ""
     task_type = _task_type_label(task_config)
+    started_at = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
     lines = [
         _build_persona_header(task_config),
@@ -335,6 +337,7 @@ def build_prompt(
         "",
         f"**Task type**: {task_type}",
         f"**Iteration**: {iteration}",
+        f"**Started**: {started_at}",
         "",
     ]
 
@@ -394,7 +397,7 @@ def build_prompt(
         f"Call `mcp__linear__linear_create_comment` with `issueId: \"{issue_linear_id}\"` and this body:",
         "",
         "```markdown",
-        "## Review Ready",
+        f"## Review Ready  · started {started_at}, <current time> elapsed",
         "",
         "### What was done",
         "[Bulleted list — specific files, components, APIs changed]",

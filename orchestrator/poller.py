@@ -9,6 +9,7 @@ Two execution modes:
 """
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -233,20 +234,37 @@ class Poller:
         except Exception:
             logger.warning("could not add RES label to issue=%s (continuing)", issue_id)
 
-        # Post start comment per task type
+        # Post start comment per task type (with timestamp + estimate)
+        now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        _estimates = {
+            "pep":              "3–7 min",
+            "core_plan":        "5–12 min",
+            "block":            "10–30 min",
+            "plan":             "5–10 min",
+            "design_to_code":   "15–45 min",
+            "frontend_feature": "10–30 min",
+            "frontend_bug":     "5–15 min",
+            "backend_feature":  "10–30 min",
+            "backend_bug":      "5–15 min",
+        }
+        estimate = _estimates.get(task_type, "unknown")
+        _timing = f"\n\n**Started:** {now_str}  ·  **Estimate:** {estimate}"
         start_comments = {
             "pep": (
                 "▶️ PEP Reader Agent started — analysing PEP and creating the Core Plan.\n\n"
                 "I'll create one Core Plan issue with all plans, blocks, and tasks, "
                 "then move it to **Human Review** for your approval."
+                + _timing
             ),
             "core_plan": (
                 "▶️ Block Decomposer Agent started — creating Block sub-issues from the approved plan.\n\n"
                 "I'll post a summary here when all blocks are created and queued for execution."
+                + _timing
             ),
             "plan": (
                 "▶️ Planning Agent started — analysing plan and creating phase issues.\n\n"
                 "I'll post a summary comment here when all phases are ready."
+                + _timing
             ),
         }
         comment = start_comments.get(task_type)
