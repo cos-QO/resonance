@@ -4,17 +4,11 @@
       "command": "node",
       "args": [
         "/path/to/npm-global/lib/node_modules/linear-mcp/build/index.js"
-      ],
-      "env": {
-        "LINEAR_ACCESS_TOKEN": "${LINEAR_API_KEY}"
-      }
+      ]
     },
     "figma": {
       "command": "npx",
-      "args": ["-y", "figma-developer-mcp", "--stdio"],
-      "env": {
-        "FIGMA_API_KEY": "${FIGMA_API_KEY}"
-      }
+      "args": ["-y", "figma-developer-mcp", "--stdio"]
     }
   }
 }

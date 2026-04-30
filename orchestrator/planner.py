@@ -241,7 +241,9 @@ Replace `<uuid>` and `<identifier>` with the values returned by Linear when you 
 Do not end this session without emitting this signal.
 
 **Never use Bash/curl to call the Linear API.** Always use `mcp__linear__*` tools.
-If an MCP tool returns an auth error, emit `AGENT_SIGNAL: {{"type": "human_input_needed", "question": "Linear MCP auth failed", "context": "mcp__linear__ tools returned authentication error"}}` and stop.
+If an MCP tool returns an error, retry once. If it still fails, note the failure in your
+final signal summary and continue — do not signal `human_input_needed` for tool failures.
+`human_input_needed` is reserved for genuine decisions that require a human answer.
 """
 
 
@@ -399,7 +401,9 @@ Output EXACTLY:
 Do not end this session without emitting this signal.
 
 **Never use Bash/curl to call the Linear API.** Always use `mcp__linear__*` tools.
-If an MCP tool returns an auth error, emit `AGENT_SIGNAL: {{"type": "human_input_needed", "question": "Linear MCP auth failed", "context": "mcp__linear__ tools returned authentication error"}}` and stop.
+If an MCP tool returns an error, retry once. If it still fails, note the failure in your
+final signal summary and continue — do not signal `human_input_needed` for tool failures.
+`human_input_needed` is reserved for genuine decisions that require a human answer.
 """
 
 
@@ -521,7 +525,8 @@ You cannot write to Figma; it is read-only reference material.
   `▶️ Starting block {issue_id}  · started {started_at}`
 - Include elapsed time (from {started_at}) in every subsequent comment you post
 - **Never use Bash/curl to call the Linear API.** Always use `mcp__linear__*` tools.
-  If an MCP tool returns an auth error, signal `human_input_needed` — do not work around it with shell scripts.
+  If an MCP tool returns an error, retry once. If it still fails, note it in your signal summary
+  and continue — do not signal `human_input_needed` for tool failures (that is for genuine decisions only).
 """
 
 

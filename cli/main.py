@@ -611,6 +611,43 @@ def doctor():
         _fail("Linear API", str(e))
         all_ok = False
 
+    # ── MCP ────────────────────────────────────────────────────────────────────
+    console.print()
+    console.print("[bold]MCP servers[/bold]")
+    mcp_path = Path(".mcp.json")
+    if mcp_path.exists():
+        try:
+            import json as _json
+            mcp_cfg = _json.loads(mcp_path.read_text())
+            servers = mcp_cfg.get("mcpServers", mcp_cfg)
+            if "linear" in servers:
+                # Warn if any env values are unexpanded ${...} placeholders
+                import re as _re
+                linear_env = servers["linear"].get("env", {})
+                bad = [k for k, v in linear_env.items() if isinstance(v, str) and _re.search(r"\$\{", v)]
+                if bad:
+                    _warn("MCP linear", f"env fields contain unexpanded variables ({', '.join(bad)}) — run: ./wizard.sh check")
+                    all_ok = False
+                else:
+                    _ok("MCP linear server (auth via LINEAR_ACCESS_TOKEN injected at runtime)")
+            else:
+                _fail("MCP linear", "not found in .mcp.json — agents will have no Linear access")
+                all_ok = False
+            if "figma" in servers:
+                _ok("MCP figma server")
+            else:
+                figma_key = os.environ.get("FIGMA_API_KEY")
+                if figma_key:
+                    _warn("MCP figma", "not in .mcp.json but FIGMA_API_KEY is set — run: ./wizard.sh check")
+                else:
+                    _warn("MCP figma", "not configured (optional — needed for design_to_code tasks)")
+        except Exception as e:
+            _fail(".mcp.json", f"parse error: {e}")
+            all_ok = False
+    else:
+        _fail(".mcp.json", "not found — run: cp .mcp.json.example .mcp.json  then resonance setup")
+        all_ok = False
+
     # ── Summary ───────────────────────────────────────────────────────────────
     console.print()
     if all_ok:
@@ -622,7 +659,8 @@ def doctor():
         console.print("  Quick fixes:")
         console.print("    [bold]resonance fix[/bold]          — create missing labels and workflow states")
         console.print("    [bold]resonance setup[/bold]        — full configuration wizard (credentials + Linear)")
-        console.print("    [bold]./setup.sh update[/bold]      — update a specific API key")
+        console.print("    [bold]./wizard.sh check[/bold]       — full health-check wizard (auto-fixes MCP, deps)")
+        console.print("    [bold]./wizard.sh update[/bold]      — update a specific API key")
 
     raise typer.Exit(0 if all_ok else 1)
 

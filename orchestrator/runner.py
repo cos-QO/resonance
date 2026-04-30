@@ -5,6 +5,7 @@ The orchestrator calls Runner.start() then polls Runner.poll() in its main loop.
 """
 import json
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -103,9 +104,16 @@ class Runner:
         run_state.update_run(self._issue_id, pid=None)
 
         logger.info("launching worker issue=%s cmd=%s", self._issue_id, " ".join(cmd))
+        # Build subprocess env: inherit current env and add LINEAR_ACCESS_TOKEN so the
+        # linear-mcp server (which reads that var) authenticates correctly. Claude CLI
+        # does NOT expand ${VAR} syntax in .mcp.json env fields, so we inject it here.
+        proc_env = os.environ.copy()
+        if "LINEAR_API_KEY" in proc_env:
+            proc_env.setdefault("LINEAR_ACCESS_TOKEN", proc_env["LINEAR_API_KEY"])
         self._proc = subprocess.Popen(
             cmd,
             cwd=str(self._worktree),
+            env=proc_env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -437,8 +445,11 @@ def build_prompt(
         "",
         "## Signal Protocol",
         "",
-        "When you need human input, output exactly:",
+        "When you need a genuine **human decision** (not a tool failure), output exactly:",
         '`AGENT_SIGNAL: {"type": "human_input_needed", "question": "<your question>", "context": "<brief context>"}`',
+        "",
+        "Do NOT use `human_input_needed` for infrastructure problems (MCP errors, network failures, missing files).",
+        "If a tool fails, retry once, then note the failure in your review summary and continue.",
         "",
         "When work is ready for human review, output exactly:",
         '`AGENT_SIGNAL: {"type": "ready_for_review", "summary": "<what was done>", "artifacts": {"preview_url": "<url>"}}`',

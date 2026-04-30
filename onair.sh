@@ -47,7 +47,7 @@ done
 
 if [[ ! -f .env ]]; then
   fail ".env not found."
-  echo -e "       Run ${BOLD}./setup.sh${RESET} to configure."
+  echo -e "       Run ${BOLD}./wizard.sh${RESET} to configure."
   echo ""
   exit 1
 fi
