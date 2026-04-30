@@ -57,7 +57,7 @@ The package installs as `resonance` / `reso` (see `pyproject.toml`). Requires Py
 
 ```bash
 # First-time setup (interactive, creates .env and Linear workflow states)
-./setup.sh
+./wizard.sh
 resonance setup
 
 # Health check (verifies credentials, Linear states/labels)

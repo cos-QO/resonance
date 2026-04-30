@@ -36,15 +36,15 @@ Prerequisites: Python 3.11+, Git 2.5+, [Claude Code CLI](https://claude.ai/code)
 
 ```bash
 git clone https://github.com/cos-QO/resonance && cd resonance
-./setup.sh          # guided wizard: credentials + Linear states/labels
+./wizard.sh          # guided wizard: credentials + Linear states/labels
 resonance doctor    # verify everything is wired correctly
 ./onair.sh          # start orchestrator + TUI dashboard
 ```
 
 `./onair.sh` runs pre-flight checks, activates the virtual environment, runs `resonance doctor` (and `resonance fix` if it finds fixable issues), prompts for a Linear project scope if none is set, starts the orchestrator in the background, and opens the Textual TUI. Closing the TUI also stops the orchestrator.
 
-To update a single credential: `./setup.sh update`
-To remove credentials and runtime state: `./setup.sh wipe`
+To update a single credential: `./wizard.sh update`
+To remove credentials and runtime state: `./wizard.sh wipe`
 
 ---
 
@@ -130,6 +130,6 @@ Key settings:
 
 Task types are defined in `task_types:` — add a new block to support a new label combination without changing orchestrator code.
 
-`.env` holds credentials (`LINEAR_API_KEY`, `LINEAR_TEAM_ID`, optionally `LINEAR_PROJECT_ID`, `FIGMA_API_KEY`, `GITHUB_TOKEN`). Written by `./setup.sh`, never committed.
+`.env` holds credentials (`LINEAR_API_KEY`, `LINEAR_TEAM_ID`, optionally `LINEAR_PROJECT_ID`, `FIGMA_API_KEY`, `GITHUB_TOKEN`). Written by `./wizard.sh`, never committed.
 
 For detailed operation, troubleshooting, and recovery procedures, see `docs/operator-runbook.md`.

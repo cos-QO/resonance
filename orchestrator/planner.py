@@ -27,8 +27,11 @@ Planning Agent (label: plan — legacy)
 import logging
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from .config import Config
+
+_NY = ZoneInfo("America/New_York")
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +216,7 @@ Plan 2: [title] (depends on Plan 1)
 ## Step 5 — Post summary comment on PEP issue
 
 Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`.
-Before posting, run `date -u +%H:%M` in Bash and compute the elapsed minutes
+Before posting, run `TZ=America/New_York date +"%-I:%M %p ET"` in Bash and compute the elapsed minutes
 since your start to fill in `<elapsed>`.
 
 ```
@@ -257,7 +260,7 @@ def build_core_plan_prompt(issue: dict, config: Config) -> str:
     Reads an approved Core Plan, creates Block sub-issues with full context,
     sets blocking relations, moves blocks to Plan Approved, signals blocks_created.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
     issue_id    = issue.get("identifier", issue["id"])
     issue_uuid  = issue["id"]
     title       = issue.get("title", "")
@@ -265,7 +268,7 @@ def build_core_plan_prompt(issue: dict, config: Config) -> str:
     team_id     = config.linear_team_id
     project_id  = config.linear_project_id or ""
     eligibility = config.eligibility_state
-    started_at  = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    started_at  = datetime.now(_NY).strftime("%-I:%M %p ET")
 
     return f"""\
 # Block Decomposer Agent — {issue_id}: {title}
@@ -420,12 +423,12 @@ final signal summary and continue — do not signal `human_input_needed` for too
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_block_execution_prompt(issue: dict, task_cfg: dict) -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
     issue_id    = issue.get("identifier", issue["id"])
     issue_uuid  = issue["id"]
     title       = issue.get("title", "")
     description = (issue.get("description", "") or "").strip()
-    started_at  = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    started_at  = datetime.now(_NY).strftime("%-I:%M %p ET")
 
     return f"""\
 # Block Execution Agent — {issue_id}: {title}
@@ -459,7 +462,7 @@ For each task in the **Tasks** section:
    ✅ Task done: <task name>  · <elapsed, e.g. "4 min in">
    <What you did — 1-2 sentences. Key decisions or findings only.>
    ```
-   Compute elapsed time from your start time ({started_at}) using `date -u +%H:%M` in Bash.
+   Compute elapsed time from your start time ({started_at}) using `TZ=America/New_York date +"%-I:%M %p ET"` in Bash.
 
 ### Step 3 — Self-verify
 

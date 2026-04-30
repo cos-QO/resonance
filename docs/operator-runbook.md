@@ -1,6 +1,6 @@
 # Operator Runbook
 
-Day-to-day operation reference for Resonance. Assumes setup is already complete. If you have not run `./setup.sh` yet, start there.
+Day-to-day operation reference for Resonance. Assumes setup is already complete. If you have not run `./wizard.sh` yet, start there.
 
 ---
 
@@ -24,10 +24,10 @@ claude --version   # confirms auth
 
 ```bash
 git clone https://github.com/cos-QO/resonance && cd resonance
-./setup.sh
+./wizard.sh
 ```
 
-`./setup.sh` does the following in order:
+`./wizard.sh` does the following in order:
 
 1. Checks whether `resonance` is installed; if not, runs `pip install -e .` automatically.
 2. Prompts for your Linear API key and validates it against the Linear API.
@@ -42,10 +42,10 @@ After setup: `resonance doctor` confirms everything is wired up correctly, then 
 **Setup modes:**
 
 ```bash
-./setup.sh              # first-time setup (default)
-./setup.sh overwrite    # redo everything — delete .env and re-enter all credentials
-./setup.sh update       # update one or more API keys interactively
-./setup.sh wipe         # remove .env and clear runs/state.json, events.jsonl, logs/
+./wizard.sh              # first-time setup (default)
+./wizard.sh overwrite    # redo everything — delete .env and re-enter all credentials
+./wizard.sh update       # update one or more API keys interactively
+./wizard.sh wipe         # remove .env and clear runs/state.json, events.jsonl, logs/
                         # (git worktrees in workspaces/ are preserved)
 ```
 

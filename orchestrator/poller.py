@@ -8,6 +8,7 @@ Two execution modes:
   execution — all other task types; normal run → Human Review cycle
 """
 import logging
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,14 @@ class Poller:
         # issue identifiers we've already posted a "blocked" [PM] comment on
         # (reset on orchestrator restart — duplicate comments on restart are acceptable)
         self._blocked_notified: set[str] = set()
+        # GitHub remote URL (without .git suffix) — used for branch link generation
+        try:
+            _remote = subprocess.check_output(
+                ["git", "remote", "get-url", "origin"], text=True
+            ).strip().removesuffix(".git")
+        except Exception:
+            _remote = ""
+        self._github_remote = _remote
 
     # ── Entry point ───────────────────────────────────────────────────────────
 
@@ -398,6 +407,7 @@ class Poller:
 
         write_event(issue_id, "run_complete", artifacts=result.artifacts)
         self._write_checkpoint(issue_id, "human_review")
+        self._spawn_log_agent(issue_id)
 
     def _handle_failure(
         self,
@@ -691,16 +701,42 @@ class Poller:
 
             try:
                 self._linear.set_issue_state(issue["id"], issue["team"]["id"], "Done")
+                branch = f"agent/{issue_id.lower()}"
+                github_url = f"{self._github_remote}/tree/{branch}" if self._github_remote else ""
+                github_line = f"\n🔗 [View branch on GitHub]({github_url})" if github_url else ""
                 lines = ["✅ Block complete and verified.", ""]
                 if summary:
                     lines += [summary, ""]
-                lines.append("_This block is Done. The parent plan will move to Human Review when all blocks are complete._")
+                lines.append(f"Branch: `{branch}`{github_line}")
+                lines.append("\n_This block is Done. The parent plan will move to Human Review when all blocks are complete._")
                 self._linear.post_comment(issue["id"], "\n".join(lines))
             except Exception:
                 logger.exception("failed to mark block Done issue=%s", issue_id)
 
+        # Push branch to GitHub
+        current_run = run_state.get_run(issue_id)
+        worktree_path = current_run.get("worktree", "") if current_run else ""
+        branch = f"agent/{issue_id.lower()}"
+        if worktree_path and self._config.github_token:
+            try:
+                push_result = subprocess.run(
+                    ["git", "push", "-u", "origin", branch],
+                    cwd=worktree_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                if push_result.returncode == 0:
+                    logger.info("pushed branch issue=%s branch=%s", issue_id, branch)
+                    write_event(issue_id, "branch_pushed", branch=branch)
+                else:
+                    logger.warning("git push failed issue=%s: %s", issue_id, push_result.stderr[:200])
+            except Exception:
+                logger.exception("git push failed issue=%s", issue_id)
+
         write_event(issue_id, "block_done")
         logger.info("block done issue=%s", issue_id)
+        self._spawn_log_agent(issue_id)
 
     # ── Dependency management ─────────────────────────────────────────────────
 
@@ -810,6 +846,79 @@ class Poller:
                 self._retry_run(issue_id)
             write_event(issue_id, "run_approved")
 
+    # ── Log agent (Haiku) ─────────────────────────────────────────────────────
+
+    def _spawn_log_agent(self, issue_id: str) -> None:
+        """Spawn a lightweight Haiku agent to write RUNLOG.md for handoff."""
+        import shutil
+        import json as _json
+        if not shutil.which("claude"):
+            return
+
+        memory_dir = Path(f"runs/memory/{issue_id}")
+        context_file = memory_dir / "context.json"
+        log_out = memory_dir / "RUNLOG.md"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+
+        # Collect events for this issue from runs/events.jsonl
+        events_summary = ""
+        try:
+            events_path = Path("runs/events.jsonl")
+            if events_path.exists():
+                lines = []
+                for raw in events_path.read_text().splitlines():
+                    try:
+                        ev = _json.loads(raw)
+                        if ev.get("issue_id") == issue_id:
+                            ts = ev.get("timestamp", "")[:16]
+                            etype = ev.get("event_type", "")
+                            extra = {k: v for k, v in ev.items() if k not in ("issue_id", "event_type", "timestamp")}
+                            lines.append(f"{ts}  {etype}  {extra}" if extra else f"{ts}  {etype}")
+                    except Exception:
+                        pass
+                events_summary = "\n".join(lines[-60:])  # last 60 events
+        except Exception:
+            pass
+
+        context_summary = ""
+        try:
+            if context_file.exists():
+                context_summary = context_file.read_text()
+        except Exception:
+            pass
+
+        prompt = f"""You are a log agent. Write a concise RUNLOG.md for issue {issue_id}.
+
+## Run Context
+{context_summary}
+
+## Events (most recent 60)
+{events_summary}
+
+## Your task
+Write a markdown file to `{log_out}` with these sections:
+- **Summary**: 2-3 sentences — what was built, what signals were emitted, final state
+- **Timeline**: key events with timestamps (workspace ready → worker start → signals → done)
+- **Artifacts**: any preview_url, branch, or output paths mentioned in context
+- **Handoff notes**: what the next agent or human needs to know to continue this work
+
+Keep it under 50 lines. Write only the file — no other output."""
+
+        try:
+            subprocess.Popen(
+                [
+                    "claude", "-p", prompt,
+                    "--model", "claude-haiku-4-5-20251001",
+                    "--output-format", "text",
+                    "--permission-mode", "bypassPermissions",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("log agent spawned issue=%s output=%s", issue_id, log_out)
+        except Exception:
+            logger.warning("could not spawn log agent issue=%s", issue_id)
+
     # ── RESONANCE.md checkpoint ────────────────────────────────────────────────
 
     def _write_checkpoint(self, issue_id: str, status: str) -> None:
@@ -904,16 +1013,26 @@ class Poller:
                 block_lines = "\n".join(
                     f"  - {c['identifier']}: {c['title']}" for c in block_children
                 )
+                branch_links = "\n".join(
+                    f"  - [{c['identifier']} branch]({self._github_remote}/tree/agent/{c['identifier'].lower()})"
+                    for c in block_children
+                ) if self._github_remote else ""
+
                 worktree_cmds = "\n".join(
                     f"  resonance attach {c['identifier']}" for c in block_children
                 )
+
+                github_section = (
+                    f"\n**Review on GitHub:**\n{branch_links}\n"
+                ) if branch_links else ""
+
                 comment = (
                     f"✅ **All blocks complete — ready for your review.**\n\n"
-                    f"**Blocks delivered:**\n{block_lines}\n\n"
+                    f"**Blocks delivered:**\n{block_lines}\n"
+                    f"{github_section}\n"
                     f"**To review or take control of any block:**\n"
                     f"```\n{worktree_cmds}\n```\n\n"
-                    f"Each block has a branch `agent/<identifier>` with committed changes. "
-                    f"Open PRs from those branches for code review.\n\n"
+                    f"Each block has a branch `agent/<identifier>`. Open PRs from those branches for code review.\n\n"
                     f"_To approve: move to **Done**. To request changes: add a comment and move to **Agent Feedback Needed**._"
                 )
                 self._linear.post_comment(issue["id"], comment)
