@@ -22,9 +22,51 @@ logger = logging.getLogger(__name__)
 
 SIGNAL_PATTERN = re.compile(r"AGENT_SIGNAL:\s*(\{.*\})")
 
-# Stream-json event types we care about
-_TEXT_TYPES = {"assistant", "text"}
-_TOOL_TYPES = {"tool_use", "tool_result"}
+
+def _describe_tool_call(tool_name: str, tool_input: dict) -> tuple[str, str]:
+    """Return (short_label, detail) for a tool call — used in the event stream."""
+    if tool_name == "mcp__linear__linear_create_issue":
+        return "Linear  create issue", tool_input.get("title", "")[:70]
+    if tool_name == "mcp__linear__linear_create_issues":
+        n = len(tool_input.get("issues", []))
+        return "Linear  create issues", f"{n} issue(s)"
+    if tool_name == "mcp__linear__linear_create_comment":
+        body = (tool_input.get("body", "") or "").strip()
+        return "Linear  post comment", body.split("\n")[0][:70]
+    if tool_name == "mcp__linear__linear_bulk_update_issues":
+        ids = tool_input.get("ids", [])
+        return "Linear  update issue", ", ".join(ids[:3])
+    if tool_name == "mcp__linear__linear_search_issues_by_identifier":
+        ids = tool_input.get("identifiers", [])
+        return "Linear  read issue", ", ".join(str(i) for i in ids[:3])
+    if tool_name == "mcp__linear__linear_get_project":
+        return "Linear  get project", tool_input.get("projectId", "")[:40]
+    if tool_name == "mcp__linear__linear_list_projects":
+        return "Linear  list projects", ""
+    if tool_name.startswith("mcp__linear__linear_"):
+        action = tool_name[len("mcp__linear__linear_"):].replace("_", " ")
+        return f"Linear  {action}", ""
+    if tool_name.startswith("mcp__figma__"):
+        action = tool_name[len("mcp__figma__"):].replace("_", " ")
+        return f"Figma   {action}", ""
+    if tool_name == "Bash":
+        desc = tool_input.get("description", "") or tool_input.get("command", "")
+        return "Bash", str(desc)[:70]
+    if tool_name == "Read":
+        path = tool_input.get("file_path", "")
+        return "Read", path[-60:] if len(path) > 60 else path
+    if tool_name in ("Write", "Edit", "MultiEdit"):
+        path = tool_input.get("file_path", "")
+        return tool_name, path[-60:] if len(path) > 60 else path
+    if tool_name == "WebFetch":
+        return "WebFetch", tool_input.get("url", "")[:70]
+    if tool_name == "WebSearch":
+        return "WebSearch", tool_input.get("query", "")[:70]
+    if tool_name == "Glob":
+        return "Glob", tool_input.get("pattern", "")[:70]
+    if tool_name == "Grep":
+        return "Grep", tool_input.get("pattern", "")[:70]
+    return tool_name[:35], ""
 
 
 @dataclass
@@ -180,15 +222,23 @@ class Runner:
     def _handle_stream_event(self, event: dict) -> None:
         event_type = event.get("type", "")
 
-        if event_type in _TEXT_TYPES:
-            text = event.get("text") or event.get("content", "")
-            if text:
-                self._scan_for_signal(text)
-                write_event(self._issue_id, "worker_output", text=str(text)[:500])
-
-        elif event_type in _TOOL_TYPES:
-            tool_name = event.get("name", "")
-            write_event(self._issue_id, "tool_use", tool=tool_name)
+        if event_type == "assistant":
+            # Tool calls and text are nested in message.content[]
+            for item in event.get("message", {}).get("content", []):
+                ctype = item.get("type", "")
+                if ctype == "text":
+                    text = item.get("text", "")
+                    if text:
+                        self._scan_for_signal(text)
+                        # Emit first meaningful line as a brief thinking note
+                        first = text.strip().split("\n")[0][:120]
+                        if first:
+                            write_event(self._issue_id, "agent_thinking", text=first)
+                elif ctype == "tool_use":
+                    tool_name = item.get("name", "")
+                    tool_input = item.get("input", {})
+                    label, detail = _describe_tool_call(tool_name, tool_input)
+                    write_event(self._issue_id, "agent_action", label=label, detail=detail)
 
         elif event_type == "result":
             # Final result event — signal may live in the "result" text field

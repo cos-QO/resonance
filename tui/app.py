@@ -579,6 +579,7 @@ class _EventBrowserScreen(ModalScreen):
         self._events = [
             ev for ev in events
             if not (ev.get("issue") == "system" and ev.get("type") in _sys)
+            and ev.get("type") not in _HIDDEN_EVENTS
         ]
     def compose(self) -> ComposeResult:
         from textual.widgets import ListView, ListItem
@@ -587,15 +588,33 @@ class _EventBrowserScreen(ModalScreen):
             items = []
             for ev in reversed(self._events[-300:]):
                 ts    = ev.get("ts", "")
-                short = ts[11:19] if len(ts) > 10 else ts
+                short = ts[11:16] if len(ts) > 10 else ts
                 issue = ev.get("issue", "system")
                 etype = ev.get("type", "?")
                 color = _event_color(etype)
-                extra = {k: v for k, v in ev.items() if k not in {"ts", "issue", "type"}}
-                extra_str = "  " + "  ".join(f"{k}={str(v)[:40]}" for k, v in extra.items()) if extra else ""
+                if etype == "agent_action":
+                    label  = ev.get("label", "")
+                    detail = ev.get("detail", "")
+                    line = (
+                        f"[dim]{short}[/dim]  [bold cyan]{issue:<10}[/bold cyan]  "
+                        f"[{color}]{label:<28}[/{color}]"
+                        + (f"  [dim]{detail[:50]}[/dim]" if detail else "")
+                    )
+                elif etype == "agent_thinking":
+                    line = (
+                        f"[dim]{short}[/dim]  [bold cyan]{issue:<10}[/bold cyan]  "
+                        f"[dim]· {ev.get('text', '')[:80]}[/dim]"
+                    )
+                else:
+                    label = _EVENT_LABELS.get(etype, etype)
+                    extra = {k: v for k, v in ev.items() if k not in {"ts", "issue", "type"}}
+                    extra_str = "  " + "  ".join(f"{k}={str(v)[:35]}" for k, v in list(extra.items())[:4]) if extra else ""
+                    line = (
+                        f"[dim]{short}[/dim]  [bold cyan]{issue:<10}[/bold cyan]  "
+                        f"[{color}]{label:<28}[/{color}][dim]{extra_str}[/dim]"
+                    )
                 items.append(ListItem(Static(
-                    f"[dim]{short}[/dim]  [bold cyan]{issue:<12}[/bold cyan]  "
-                    f"[{color}]{etype:<28}[/{color}][dim]{extra_str}[/dim]",
+                    line,
                     markup=True
                 )))
             yield ListView(*items, id="_evb_list")
@@ -1248,8 +1267,28 @@ def _event_color(etype: str) -> str:
     if any(x in etype for x in ("fail", "error", "abort", "stall")): return "red"
     if any(x in etype for x in ("complete", "success", "approved")):  return "bright_green"
     if any(x in etype for x in ("waiting", "paused", "feedback")):    return "yellow"
-    if "started" in etype:                                              return "cyan"
+    if etype == "agent_action":   return "bright_cyan"
+    if etype == "agent_thinking": return "dim"
+    if etype == "agent_signal":   return "bright_green"
+    if "started" in etype:        return "cyan"
     return "white"
+
+
+# Events that are too noisy to show in the live stream (still in events.jsonl)
+_HIDDEN_EVENTS = {"usage", "worker_output"}
+
+# Human-readable labels for lifecycle event types
+_EVENT_LABELS: dict[str, str] = {
+    "workspace_created": "workspace ready",
+    "worker_started":    "worker started",
+    "run_started":       "run started",
+    "worker_finished":   "worker finished",
+    "run_complete":      "run complete",
+    "run_error_detail":  "error",
+    "hook_stop":         "agent stopped",
+    "subagent_stop":     "subagent stopped",
+    "agent_signal":      "signal",
+}
 
 
 def _section_header(left: Text, right: Optional[Text] = None) -> Table:
@@ -1885,26 +1924,56 @@ class ResonanceDashboard(App):
         visible = [
             ev for ev in events
             if not (ev.get("issue") == "system" and ev.get("type") in _SYSTEM_EVENTS)
+            and ev.get("type") not in _HIDDEN_EVENTS
         ]
-        for ev in visible[-60:]:
+        for ev in visible[-80:]:
             ts    = ev.get("ts", "")
-            short = ts[11:19] if len(ts) > 10 else ts
+            short = ts[11:16] if len(ts) > 10 else ts  # HH:MM only
             issue = ev.get("issue", "system")
             etype = ev.get("type", "?")
-            extra = {k: v for k, v in ev.items() if k not in {"ts", "issue", "type"}}
-            extra_str = (
-                "  " + "  ".join(
-                    f"[dim]{k}=[/dim][dim white]{str(v)[:30]}[/dim white]"
-                    for k, v in extra.items()
-                ) if extra else ""
-            )
             color = _event_color(etype)
-            log.write(
-                f"[dim]{short}[/dim]  "
-                f"[bold cyan]{issue:<12}[/bold cyan]  "
-                f"[{color}]{etype:<28}[/{color}]"
-                f"{extra_str}"
-            )
+
+            if etype == "agent_action":
+                label  = ev.get("label", "")
+                detail = ev.get("detail", "")
+                log.write(
+                    f"[dim]{short}[/dim]  "
+                    f"[bold cyan]{issue:<8}[/bold cyan]  "
+                    f"[{color}]{label:<26}[/{color}]"
+                    + (f"  [dim white]{detail}[/dim white]" if detail else "")
+                )
+            elif etype == "agent_thinking":
+                text = ev.get("text", "")
+                log.write(
+                    f"[dim]{short}[/dim]  "
+                    f"[bold cyan]{issue:<8}[/bold cyan]  "
+                    f"[dim]· {text}[/dim]"
+                )
+            elif etype == "agent_signal":
+                sig = ev.get("signal", {})
+                sig_type = sig.get("type", "") if isinstance(sig, dict) else str(sig)
+                summary  = sig.get("summary", "") if isinstance(sig, dict) else ""
+                log.write(
+                    f"[dim]{short}[/dim]  "
+                    f"[bold cyan]{issue:<8}[/bold cyan]  "
+                    f"[{color}]▶ signal  {sig_type:<18}[/{color}]"
+                    + (f"  [dim white]{summary[:60]}[/dim white]" if summary else "")
+                )
+            else:
+                label = _EVENT_LABELS.get(etype, etype)
+                extra = {k: v for k, v in ev.items() if k not in {"ts", "issue", "type"}}
+                extra_str = (
+                    "  " + "  ".join(
+                        f"[dim]{k}=[/dim][dim white]{str(v)[:35]}[/dim white]"
+                        for k, v in list(extra.items())[:4]
+                    ) if extra else ""
+                )
+                log.write(
+                    f"[dim]{short}[/dim]  "
+                    f"[bold cyan]{issue:<8}[/bold cyan]  "
+                    f"[{color}]{label:<26}[/{color}]"
+                    f"{extra_str}"
+                )
 
     def _draw_log_view(self, runs: dict) -> None:
         run = runs.get(self._selected_id or "")
