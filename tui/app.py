@@ -10,6 +10,9 @@ Layout (top → bottom):
 """
 import json
 import os
+import shlex
+import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -802,6 +805,140 @@ class _CleanupScreen(ModalScreen):
             self.dismiss(False)
 
 
+def _launch_in_terminal(worktree: str, issue_id: str, context: str = "") -> None:
+    """Open a new terminal window at worktree running claude.
+
+    Writes a temp launch script so quoting is never an issue.
+    Tries iTerm2 first, then Terminal.app (macOS only).
+    If context is provided it is copied to the clipboard — paste into Claude
+    as the first message.
+    """
+    if context:
+        try:
+            subprocess.run(["pbcopy"], input=context.encode(), check=True, capture_output=True)
+        except Exception:
+            pass
+
+    ctx_hint = (
+        '\necho "  📋 Context copied to clipboard — paste with ⌘V as your first message"\n'
+        if context else ""
+    )
+
+    script_lines = [
+        "#!/bin/bash",
+        f"cd {shlex.quote(worktree)}",
+        'echo ""',
+        f'echo "  Resonance  ·  {issue_id}"',
+        f'echo "  Worktree : {worktree}"',
+        f'echo "  Tip      : /reso {issue_id}  — loads full issue context"',
+        ctx_hint,
+        'echo ""',
+        "claude",
+    ]
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".sh", delete=False, prefix=f"reso_{issue_id}_"
+    ) as f:
+        f.write("\n".join(script_lines) + "\n")
+        script_path = f.name
+    os.chmod(script_path, 0o755)
+
+    # iTerm2 first, then Terminal.app
+    iterm_as = f"""\
+tell application "iTerm2"
+    create window with default profile
+    tell current session of current window
+        write text "bash {script_path}"
+    end tell
+end tell
+"""
+    term_as = f"""\
+tell application "Terminal"
+    do script "bash {script_path}"
+    activate
+end tell
+"""
+    for applescript in [iterm_as, term_as]:
+        try:
+            subprocess.run(
+                ["osascript", "-e", applescript],
+                check=True, capture_output=True,
+            )
+            return
+        except subprocess.CalledProcessError:
+            continue
+
+    # Last resort: open Terminal.app at the worktree
+    try:
+        subprocess.Popen(["open", "-a", "Terminal", worktree])
+    except Exception:
+        pass
+
+
+class _OpenTerminalScreen(ModalScreen):
+    """Pre-launch modal — shows issue context and lets the operator add an initial message."""
+
+    BINDINGS = [Binding("escape", "dismiss", "Cancel", priority=True)]
+
+    CSS = """
+    _OpenTerminalScreen { align: center middle; }
+    #_ot_box {
+        width: 76; height: auto;
+        background: $panel; border: round $accent; padding: 1 2;
+    }
+    #_ot_title   { text-style: bold; color: $accent; margin-bottom: 1; }
+    #_ot_meta    { color: $text-muted; margin-bottom: 1; }
+    #_ot_ctx_lbl { color: $text-muted; margin-top: 1; }
+    #_ot_hint    { color: $text-muted; margin-top: 1; }
+    """
+
+    def __init__(self, issue_id: str, run: dict) -> None:
+        super().__init__()
+        self._issue_id = issue_id
+        self._run = run
+
+    def compose(self) -> ComposeResult:
+        run = self._run
+        worktree  = run.get("worktree", "—")
+        branch    = run.get("branch",   "—")
+        status    = run.get("status",   "—")
+        status_color = "yellow" if status == "waiting_human" else "magenta"
+
+        with Vertical(id="_ot_box"):
+            yield Label(
+                f"  Open in Claude Code  ·  {self._issue_id}",
+                id="_ot_title",
+            )
+            yield Static(
+                f"  [{status_color}]● {status.replace('_', ' ').upper()}[/{status_color}]\n"
+                f"  Branch   : [cyan]{branch}[/cyan]\n"
+                f"  Worktree : [dim]{worktree}[/dim]\n"
+                f"  First run: [bold green]/reso {self._issue_id}[/bold green]  — loads full context",
+                markup=True,
+                id="_ot_meta",
+            )
+            yield Label(
+                "  Initial message for Claude (optional — copied to clipboard):",
+                id="_ot_ctx_lbl",
+            )
+            yield Input(
+                placeholder="e.g. 'I want to review the implementation and give feedback'",
+                id="_ot_ctx",
+            )
+            yield Label(
+                "  Enter to open terminal · Esc to cancel",
+                id="_ot_hint",
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#_ot_ctx", Input).focus()
+
+    def on_input_submitted(self, _event: Input.Submitted) -> None:
+        context = self.query_one("#_ot_ctx", Input).value.strip()
+        worktree = self._run.get("worktree", "")
+        self.dismiss((worktree, self._issue_id, context))
+
+
 class _HelpScreen(ModalScreen):
     """Full-screen help overlay — press ? or Esc to close."""
 
@@ -907,8 +1044,13 @@ def _help_content() -> str:
   [bold white]t[/bold white]    Debug trace viewer
 
   [dim]Run actions[/dim]  [dim](press Tab to select a run first — it shows [/dim][bold white]>[/bold white][dim] prefix)[/dim]
-  [bold white]f[/bold white]    Send feedback to agent      [bold white]a[/bold white]    Approve / resume selected run
-  [bold white]x[/bold white]    Abort selected run          [bold white]v[/bold white]    Toggle raw log viewer
+  [bold white]o[/bold white]    Open waiting run in Claude  [bold white]f[/bold white]    Send feedback to agent
+  [bold white]a[/bold white]    Approve / resume selected   [bold white]x[/bold white]    Abort selected run
+  [bold white]v[/bold white]    Toggle raw log viewer
+
+  [dim][bold white]o[/bold white] opens a new terminal at the issue worktree. You can type an optional initial
+  message — it's copied to clipboard for easy paste into Claude. Run [bold white]/reso [issue][/bold white]
+  inside Claude to load the full issue context, comments, and RESONANCE.md.[/dim]
 
 [bold cyan]─── Demo ───────────────────────────────────────────────────────────────────[/bold cyan]
 
@@ -1546,11 +1688,11 @@ def _attention_section(
         if kind == "feedback":
             icon   = Text("⏸ ", style="bold yellow")
             msg_t  = Text(msg, style="yellow")
-            action = Text("[f] feedback   [a] approve", style="dim")
+            action = Text("[o] open  [f] feedback  [a] approve", style="dim")
         else:
             icon   = Text("● ", style="bold magenta")
             msg_t  = Text(msg, style="magenta")
-            action = Text("→ Human Review  [Enter] details", style="dim")
+            action = Text("[o] open  → Human Review", style="dim")
         table.add_row(icon, issue_id, msg_t, action)
 
     return Group(header, table)
@@ -1636,10 +1778,10 @@ def _runs_section(
     hint_t.append("[tab] select  ", style="dim")
     if selected_id:
         run = active.get(selected_id, {})
-        if run.get("status") == "waiting_human":
-            hint_t.append("[f] feedback  [a] approve  ", style="dim yellow")
+        if run.get("status") in ("waiting_human", "needs_input"):
+            hint_t.append("[o] open  [f] feedback  [a] approve  ", style="dim yellow")
         hint_t.append("[enter] detail  [x] abort  [v] log  ", style="dim")
-    hint_t.append("[enter] detail  [c] clean", style="dim")
+    hint_t.append("[c] clean", style="dim")
 
     return Group(header, table, hint_t)
 
@@ -1978,22 +2120,23 @@ class ResonanceDashboard(App):
     ENABLE_COMMAND_PALETTE = False
 
     BINDINGS = [
-        Binding("q",             "quit",           "Quit",     priority=True),
-        Binding("r",             "manual_refresh", "Refresh"),
-        Binding("l",             "refresh_linear", "Linear ↺"),
-        Binding("p",             "set_project",    "Project"),
-        Binding("tab",           "select_next",    "Select"),
-        Binding("enter",         "detail",         "Detail",   show=False),
-        Binding("c",             "cleanup",        "Cleanup",  show=False),
-        Binding("f",             "feedback",       "Feedback"),
-        Binding("a",             "approve",        "Approve"),
-        Binding("x",             "abort",          "Abort"),
-        Binding("v",             "toggle_log",     "Log"),
-        Binding("question_mark", "help",           "Help"),
-        Binding("d",             "demo",           "Demo",     show=False),
-        Binding("e",             "event_browser",  "Events",   show=False),
-        Binding("s",             "settings",       "Settings", show=False),
-        Binding("t",             "trace_viewer",   "Traces",   show=False),
+        Binding("q",             "quit",            "Quit",     priority=True),
+        Binding("r",             "manual_refresh",  "Refresh"),
+        Binding("l",             "refresh_linear",  "Linear ↺"),
+        Binding("p",             "set_project",     "Project"),
+        Binding("tab",           "select_next",     "Select"),
+        Binding("enter",         "detail",          "Detail",   show=False),
+        Binding("c",             "cleanup",         "Cleanup",  show=False),
+        Binding("o",             "open_in_claude",  "Open"),
+        Binding("f",             "feedback",        "Feedback"),
+        Binding("a",             "approve",         "Approve"),
+        Binding("x",             "abort",           "Abort"),
+        Binding("v",             "toggle_log",      "Log"),
+        Binding("question_mark", "help",            "Help"),
+        Binding("d",             "demo",            "Demo",     show=False),
+        Binding("e",             "event_browser",   "Events",   show=False),
+        Binding("s",             "settings",        "Settings", show=False),
+        Binding("t",             "trace_viewer",    "Traces",   show=False),
     ]
 
     def __init__(self) -> None:
@@ -2320,6 +2463,42 @@ class ResonanceDashboard(App):
             )
         except Exception as exc:
             self.call_from_thread(self.notify, f"Error: {exc}", severity="error")
+
+    def action_open_in_claude(self) -> None:
+        """Open the selected (or first) waiting run in a new terminal with claude."""
+        runs = self._state()
+        _waiting = {"waiting_human", "needs_input"}
+
+        # Prefer selected run if it's waiting; otherwise pick first waiting run
+        issue_id = None
+        if self._selected_id and runs.get(self._selected_id, {}).get("status") in _waiting:
+            issue_id = self._selected_id
+        else:
+            for iid, run in sorted(runs.items()):
+                if run.get("status") in _waiting and run.get("worktree"):
+                    issue_id = iid
+                    break
+
+        if not issue_id:
+            self.notify("No waiting run to open  (Tab to select)", severity="warning")
+            return
+
+        run = runs[issue_id]
+        if not run.get("worktree"):
+            self.notify(f"{issue_id}: no local worktree available", severity="warning")
+            return
+
+        def _on_result(result: Optional[tuple]) -> None:
+            if result:
+                worktree, iid, context = result
+                threading.Thread(
+                    target=_launch_in_terminal,
+                    args=(worktree, iid, context),
+                    daemon=True,
+                ).start()
+                self.notify(f"Opening {iid} in Claude…", timeout=3.0)
+
+        self.push_screen(_OpenTerminalScreen(issue_id, run), _on_result)
 
     def action_abort(self) -> None:
         issue_id = self._selected_id
