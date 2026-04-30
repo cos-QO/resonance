@@ -298,6 +298,61 @@ unsupported:
     back to Plan Approved once a plan has been reviewed and approved.
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PROJECT CONTEXT
+# What the orchestrator automatically provisions for agents — independent of
+# what the PEP author wrote. PEPs stay goal-focused; agents get context here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+project_context:
+  # Human-readable name of the target product (used in prompts)
+  target: "ConnectUI (QueenOne frontend)"
+
+  # Default domain if a block doesn't declare one
+  default_domain: frontend
+
+  # Standards files agents MUST read before implementing, by domain.
+  # Paths are relative to .claude/memory/standards/ in the worktree.
+  standards:
+    frontend:
+      - connectui-design-system.md   # Orion components, palette, spacing, typography
+      - connectui-stack.md           # React 19, MUI v7, TanStack, Zustand, state hierarchy
+      - conventions.md               # import rules, naming, file structure
+    backend:
+      - stack.md
+      - conventions.md
+    fullstack:
+      - connectui-design-system.md
+      - connectui-stack.md
+      - conventions.md
+      - stack.md
+    design:
+      - connectui-design-system.md
+
+  # Skills agents MUST invoke before implementing, by domain.
+  # These are slash commands available in the cc-qo-skills plugin.
+  # Order matters: pre-implementation skills first, post-implementation last.
+  skills:
+    frontend:  [connectui-dev, verify, verify-visual, qo-pr]
+    backend:   [python-dev, verify]
+    fullstack: [connectui-dev, verify, verify-visual, qo-pr]
+    design:    [connectui-dev, verify-visual, qo-prototype]
+
+  # Design tool: if a Figma URL appears anywhere in the PEP or block description,
+  # the agent must extract it and use the Figma MCP to read specs.
+  figma:
+    auto_extract: true
+    mcp_tool: mcp__figma__get_figma_data
+
+  # Visual QA: screenshot + Figma comparison after implementation.
+  # verify-visual skill handles rendering; visual-qa agent handles the review.
+  visual_qa:
+    enabled: true
+    agent: visual-qa                 # agent definition in cc-qo-skills/agents/
+    trigger: figma_present           # only run if block has a Figma URL
+    playwright_mcp: playwright       # MCP server name (see .mcp.json)
+    dev_server_port: 5173            # default Vite port; skill auto-detects if different
+
+# ─────────────────────────────────────────────────────────────────────────────
 # WORKSPACE POLICY
 # ─────────────────────────────────────────────────────────────────────────────
 

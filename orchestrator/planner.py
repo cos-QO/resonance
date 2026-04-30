@@ -36,8 +36,131 @@ _NY = ZoneInfo("America/New_York")
 
 logger = logging.getLogger(__name__)
 
-PEP_LABEL = "pep"
+PEP_LABEL  = "pep"
 PLAN_LABEL = "plan"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project context helpers
+# Reads project_context from WORKFLOW.md to build domain-aware prompt sections.
+# PEPs are goal-only; the orchestrator provisions the right environment here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_domain(issue: dict, config: Config) -> str:
+    """Return the domain string for a block/issue based on labels or description."""
+    label_names = {lbl["name"].lower() for lbl in issue.get("labels", {}).get("nodes", [])}
+    if "frontend" in label_names:
+        return "frontend"
+    if "backend" in label_names:
+        return "backend"
+    if "design" in label_names:
+        return "design"
+    # Parse "**Domain:** frontend" from description
+    desc = (issue.get("description", "") or "").lower()
+    m = re.search(r"\*\*domain:\*\*\s*(frontend|backend|fullstack|full-stack|design)", desc)
+    if m:
+        raw = m.group(1).replace("-", "")
+        return raw
+    return config.workflow.get("project_context", {}).get("default_domain", "frontend")
+
+
+def _build_context_section(domain: str, config: Config) -> str:
+    """Return the ## Project Context block for a block execution prompt."""
+    ctx = config.workflow.get("project_context", {})
+    if not ctx:
+        return ""
+
+    target      = ctx.get("target", "")
+    standards_map = ctx.get("standards", {})
+    skills_map    = ctx.get("skills", {})
+    figma_auto    = ctx.get("figma", {}).get("auto_extract", False)
+    visual_qa_cfg = ctx.get("visual_qa", {})
+    visual_qa_on  = visual_qa_cfg.get("enabled", False)
+
+    standards = standards_map.get(domain, standards_map.get("frontend", []))
+    skills    = skills_map.get(domain, [])
+
+    standards_list = "\n".join(
+        f"  - Read `.claude/memory/standards/{f}`" for f in standards
+    )
+
+    # Split skills into: pre-impl (first), post-impl (verify*), final (qo-pr)
+    pre_skills   = [s for s in skills if not s.startswith("verify") and s != "qo-pr"]
+    post_skills  = [s for s in skills if s.startswith("verify")]
+    final_skills = [s for s in skills if s == "qo-pr"]
+
+    primary_skill = pre_skills[0] if pre_skills else None
+
+    figma_note = ""
+    if figma_auto:
+        figma_note = (
+            "\n\n**Figma:** If the block description or Resources section contains a "
+            "Figma URL, call `mcp__figma__get_figma_data` to read specs **before implementing**. "
+            "Extract colours → map to Queen palette tokens, spacing → MUI integer scale, "
+            "components → match to existing Orion components first."
+        )
+
+    visual_note = ""
+    if visual_qa_on and figma_auto and "verify-visual" in (post_skills or []):
+        visual_note = (
+            "\n\n**Visual QA:** After implementation, run `/verify-visual <route> [figma-url]` "
+            "to render the built UI in a real browser and compare it against the Figma spec. "
+            "A dedicated `visual-qa` agent reviews the screenshot and reports any colour, "
+            "spacing, or layout discrepancies. Fix all reported issues before signalling `block_complete`."
+        )
+
+    pre_list = "".join(f"\n  - `/{s}`" for s in pre_skills[1:]) if len(pre_skills) > 1 else ""
+    post_list = "".join(f"\n  - `/{s}`" for s in post_skills)
+    final_list = "".join(f"\n  - `/{s}`" for s in final_skills)
+
+    skill_section = ""
+    if primary_skill:
+        skill_section = f"""
+**Skill execution order:**
+1. **Before coding:** `/{primary_skill}` — loads standards, queries live docs (Context7), reads Figma.{pre_list}
+2. **After implementation:** {post_list if post_list else "`/verify L2`"}{visual_note}
+3. **Before PR:** {final_list if final_list else "`/qo-pr`"}"""
+
+    return f"""
+---
+
+## Project Context — {target or domain.capitalize()}
+
+> These standards are mandatory. Read them before writing a single line of code.
+> The PEP does not repeat them — they are the permanent contract for this project.
+
+**Standards to load first ({domain}):**
+{standards_list}
+{figma_note}
+{skill_section}
+"""
+
+
+def _build_pep_context_note(config: Config) -> str:
+    """Return a brief note for PEP Reader / Block Decomposer about project context."""
+    ctx = config.workflow.get("project_context", {})
+    if not ctx:
+        return ""
+    target = ctx.get("target", "")
+    skills_map = ctx.get("skills", {})
+    default_domain = ctx.get("default_domain", "frontend")
+    default_skills = skills_map.get(default_domain, [])
+    skills_str = ", ".join(f"`/{s}`" for s in default_skills) if default_skills else ""
+    figma_auto = ctx.get("figma", {}).get("auto_extract", False)
+
+    lines = []
+    if target:
+        lines.append(f"**Target project:** {target}")
+    if default_domain:
+        lines.append(f"**Default domain:** {default_domain}")
+    if skills_str:
+        lines.append(f"**Execution skills:** {skills_str} — include in every block's Skills section")
+    if figma_auto:
+        lines.append(
+            "**Figma:** Extract ALL Figma URLs from the PEP description and comments. "
+            "Include each URL in the Resources section of the block(s) that implement that design. "
+            "Do not summarise or paraphrase — copy the raw URL."
+        )
+    return "\n".join(lines)
 
 
 def is_pep_issue(issue: dict) -> bool:
@@ -70,6 +193,8 @@ def build_pep_reader_prompt(issue: dict, config: Config) -> str:
     project_id = config.linear_project_id or ""
     started_at = datetime.now(_NY).strftime("%-I:%M %p ET")
 
+    pep_ctx_note = _build_pep_context_note(config)
+
     return f"""\
 # PEP Reader Agent — {issue_id}: {title}
 
@@ -88,13 +213,27 @@ lead decomposing a project before handing it to a team.
 
 ---
 
+## Project Environment
+
+The agents that will execute the blocks work in a known technical environment.
+You do not need to explain the stack in the PEP — it is pre-loaded by the orchestrator.
+What you DO need to do: extract domain signals and resource links from the PEP so the
+right context gets surfaced to the right blocks.
+
+{pep_ctx_note}
+
+---
+
 ## Step 1 — Read all context
 
 1. Read the PEP description above in full.
 2. Fetch all comments on issue `{issue_id}` using `mcp__linear__linear_search_issues_by_identifier`.
    Comments contain human clarifications. Incorporate any context found there.
-3. Note any external resources (Figma links, GitHub repos, API docs) — include them
-   in the Core Plan under the relevant blocks.
+3. Extract ALL external resource URLs from the description and comments:
+   - Figma file/frame links → copy verbatim into the Resources section of the block that implements that design
+   - GitHub repo links → note in Technical Context
+   - API docs → note in the relevant block's Technical Context
+   Do not paraphrase — copy raw URLs.
 
 ---
 
@@ -159,6 +298,7 @@ Record the returned `id` (UUID) and `identifier` — needed for the signal in St
 **Acceptance Criteria:**
 - [ ] [Verifiable, observable condition]
 - [ ] [Verifiable, observable condition]
+**Resources:** [Figma URL if this block implements a design; GitHub ref; API doc URL — raw URLs only]
 **Depends on:** none
 
 #### B2 — <block title>
@@ -168,6 +308,7 @@ Record the returned `id` (UUID) and `identifier` — needed for the signal in St
 - [ ] [Specific implementation task]
 **Acceptance Criteria:**
 - [ ] [Verifiable, observable condition]
+**Resources:** [Figma URL or other links relevant to this block]
 **Depends on:** B1
 
 ### Plan 2 — <title>
@@ -277,12 +418,25 @@ def build_core_plan_prompt(issue: dict, config: Config) -> str:
     eligibility = config.eligibility_state
     started_at  = datetime.now(_NY).strftime("%-I:%M %p ET")
 
+    pep_ctx_note = _build_pep_context_note(config)
+
     return f"""\
 # Block Decomposer Agent — {issue_id}: {title}
 
 You are the Resonance PM. This Core Plan was reviewed and approved by a human.
 Your job is to create Block sub-issues — one per block — so execution agents can
 implement each block independently.
+
+## Project Environment (read before writing block descriptions)
+
+Execution agents are pre-loaded with project standards by the orchestrator — you do
+NOT need to explain MUI, React, or ConnectUI conventions in every block. What you
+MUST do: set the domain accurately and copy resource URLs verbatim so agents
+get the right context injected automatically.
+
+{pep_ctx_note}
+
+---
 
 ---
 
@@ -334,6 +488,10 @@ Record the returned `id` (UUID) and `identifier` for each block.
 ## Goal
 [What this block implements — one clear paragraph]
 
+## Domain
+frontend | backend | fullstack | design
+(The orchestrator uses this to auto-inject the right standards and skills.)
+
 ## Tasks
 - [ ] [Specific implementation task]
 - [ ] [Specific implementation task]
@@ -345,10 +503,18 @@ Record the returned `id` (UUID) and `identifier` for each block.
 
 ## Technical Context
 [Files to touch, patterns to follow, APIs, commands, environment variables.
-Include everything an agent needs — it only has the codebase and this description.]
+DO NOT explain the project stack — agents load those standards automatically.
+Focus on what is UNIQUE to this block: specific file paths, API endpoints,
+edge cases, or constraints not obvious from the codebase.]
 
 ## Resources
-[Relevant external links: Figma, API docs, GitHub refs]
+[Raw URLs only — Figma frames, API docs, GitHub refs, design tokens.
+Copy verbatim from the PEP. Each URL triggers automatic tool use by the agent.]
+
+## Skills
+[Slash commands the agent must invoke — derived from domain.
+Example (frontend): /connectui-dev, /verify L2, /qo-pr
+Example (backend):  /python-dev, /verify L2]
 
 ## Dependencies
 [Block identifiers that must be Done before this starts, or "None"]
@@ -566,6 +732,7 @@ def build_block_execution_prompt(
     issue: dict,
     task_cfg: dict,
     connect_ui_path: Optional[str] = None,
+    config: Optional["Config"] = None,
 ) -> str:
     from datetime import datetime
     issue_id    = issue.get("identifier", issue["id"])
@@ -578,6 +745,22 @@ def build_block_execution_prompt(
     if connect_ui_path:
         existing_ctx = build_existing_code_context(title, description, connect_ui_path)
 
+    # Project context: standards + skills mandate, derived from domain + WORKFLOW.md
+    project_ctx = ""
+    domain = "frontend"
+    if config is not None:
+        domain = _detect_domain(issue, config)
+        project_ctx = _build_context_section(domain, config)
+
+    if project_ctx:
+        step1_text = """\
+1. Read every file listed in the **Project Context → Standards** section above.
+2. If a Figma URL appears in the block description or Resources, call `mcp__figma__get_figma_data` now.
+3. Invoke the **Implementation skill** listed in Project Context (`/connectui-dev` or equivalent).
+4. Read every task and acceptance criterion in the Block Specification before writing code."""
+    else:
+        step1_text = "Read every task and acceptance criterion before writing any code."
+
     prompt = f"""\
 # Block Execution Agent — {issue_id}: {title}
 
@@ -587,7 +770,7 @@ shared project codebase, verify your own work, then signal done.
 ## Block Specification
 
 {description if description else "_No description provided._"}
-
+{project_ctx}
 ---
 
 ## Workspace
@@ -604,8 +787,9 @@ When reading prior work from earlier blocks, read files in your CWD (= `$MAIN_PA
 
 ## Execution Protocol
 
-### Step 1 — Read the spec
-Read every task and acceptance criterion before writing any code.
+### Step 1 — Load context, then read the spec
+
+{step1_text}
 
 ### Step 2 — Implement task by task
 

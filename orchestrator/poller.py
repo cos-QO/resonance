@@ -276,7 +276,7 @@ class Poller:
         elif task_type == "core_plan":
             prompt = build_core_plan_prompt(issue, self._config)
         elif task_type == "block":
-            prompt = build_block_execution_prompt(issue, task_cfg, connect_ui_path=target_repo_path)
+            prompt = build_block_execution_prompt(issue, task_cfg, connect_ui_path=target_repo_path, config=self._config)
         elif task_type == "plan":
             prompt = build_planning_prompt(issue, self._config)
         else:
@@ -528,6 +528,35 @@ class Poller:
         if not current:
             return
 
+        # Guard: if this is a core_plan issue, check whether blocks already exist in
+        # Linear before re-running the decomposer.  Without this guard, each retry
+        # creates a fresh set of block sub-issues even though the previous attempt
+        # already created them (the signal was missed, not the decomposition).
+        if current.get("task_type") == "core_plan":
+            linear_uuid = current.get("linear_uuid", "")
+            if linear_uuid:
+                try:
+                    children = self._linear.get_issue_children(linear_uuid)
+                    block_children = [
+                        c for c in children
+                        if any(
+                            lbl["name"].lower() == "block"
+                            for lbl in c.get("labels", {}).get("nodes", [])
+                        )
+                    ]
+                    if block_children:
+                        block_ids = [c["identifier"] for c in block_children]
+                        logger.info(
+                            "core_plan already has %d blocks — resuming monitoring issue=%s",
+                            len(block_children), issue_id,
+                        )
+                        run_state.update_run(issue_id, status="monitoring", block_ids=block_ids)
+                        issue_memory.update_context(issue_id, status="monitoring")
+                        write_event(issue_id, "plan_resumed_monitoring", blocks=len(block_children))
+                        return
+                except Exception:
+                    logger.warning("could not check existing blocks for core_plan issue=%s", issue_id)
+
         worktree = Path(current["worktree"])
         if not worktree.exists():
             try:
@@ -563,7 +592,7 @@ class Poller:
         elif task_type == "core_plan":
             prompt = build_core_plan_prompt(issue_data, self._config)
         elif task_type == "block":
-            prompt = build_block_execution_prompt(issue_data, task_cfg, connect_ui_path=retry_target_repo)
+            prompt = build_block_execution_prompt(issue_data, task_cfg, connect_ui_path=retry_target_repo, config=self._config)
         elif task_type == "plan":
             prompt = build_planning_prompt(issue_data, self._config)
         else:
@@ -753,11 +782,23 @@ class Poller:
     # ── Block complete (self-verified) ────────────────────────────────────────
 
     def _finish_block_done(self, issue_id: str, issue: Optional[dict], result: RunResult) -> None:
-        """Block execution complete and self-verified. Mark block Done."""
+        """Block execution complete and self-verified.
+
+        First completion → auto-Done (standard flow).
+        After a human feedback iteration → Human Review so the human closes the cycle.
+        """
         summary = (result.signal or {}).get("summary", "")
 
-        run_state.update_run(issue_id, status="complete", artifacts=result.artifacts)
-        issue_memory.update_context(issue_id, status="complete")
+        # Determine whether this completion follows a human feedback round.
+        current_run = run_state.get_run(issue_id)
+        has_prior_feedback = bool(
+            (current_run or {}).get("feedback_history")
+            or (current_run or {}).get("iteration", 1) > 1
+        )
+
+        new_status = "waiting_human" if has_prior_feedback else "complete"
+        run_state.update_run(issue_id, status=new_status, artifacts=result.artifacts)
+        issue_memory.update_context(issue_id, status=new_status)
 
         if issue:
             try:
@@ -766,22 +807,38 @@ class Poller:
                 logger.warning("could not update description tasks issue=%s", issue_id)
 
             try:
-                self._linear.set_issue_state(issue["id"], issue["team"]["id"], "Done")
-                _run_for_branch = run_state.get_run(issue_id)
-                branch = _run_for_branch.get("branch", f"agent/{issue_id.lower()}") if _run_for_branch else f"agent/{issue_id.lower()}"
-                github_url = f"{self._github_remote}/tree/{branch}" if self._github_remote else ""
-                github_line = f"\n🔗 [View branch on GitHub]({github_url})" if github_url else ""
-                lines = ["✅ Block complete and verified.", ""]
-                if summary:
-                    lines += [summary, ""]
-                lines.append(f"Branch: `{branch}`{github_line}")
-                lines.append("\n_This block is Done. The parent plan will move to Human Review when all blocks are complete._")
-                self._linear.post_comment(issue["id"], "\n".join(lines))
+                if has_prior_feedback:
+                    # Return to Human Review — only the human can close the cycle.
+                    self._linear.set_issue_state(
+                        issue["id"], issue["team"]["id"], self._config.state_review
+                    )
+                    lines = ["✅ **Block updated based on your feedback — ready for re-review.**", ""]
+                    if summary:
+                        lines += [summary, ""]
+                    lines += [
+                        "",
+                        "---",
+                        "_To accept:_ move to **Done**.",
+                        "_To request further changes:_ add a comment and move to **Agent Feedback Needed**.",
+                    ]
+                    self._linear.post_comment(issue["id"], "\n".join(lines))
+                else:
+                    self._linear.set_issue_state(issue["id"], issue["team"]["id"], "Done")
+                    _run_for_branch = run_state.get_run(issue_id)
+                    branch = _run_for_branch.get("branch", f"agent/{issue_id.lower()}") if _run_for_branch else f"agent/{issue_id.lower()}"
+                    github_url = f"{self._github_remote}/tree/{branch}" if self._github_remote else ""
+                    github_line = f"\n🔗 [View branch on GitHub]({github_url})" if github_url else ""
+                    lines = ["✅ Block complete and verified.", ""]
+                    if summary:
+                        lines += [summary, ""]
+                    lines.append(f"Branch: `{branch}`{github_line}")
+                    lines.append("\n_This block is Done. The parent plan will move to Human Review when all blocks are complete._")
+                    self._linear.post_comment(issue["id"], "\n".join(lines))
             except Exception:
                 logger.exception("failed to mark block Done issue=%s", issue_id)
 
         # Push branch to GitHub (use stored branch — blocks share agent/{project-slug})
-        current_run = run_state.get_run(issue_id)
+        current_run = run_state.get_run(issue_id)  # re-read: state may have been updated above
         worktree_path = current_run.get("worktree", "") if current_run else ""
         branch = current_run.get("branch", f"agent/{issue_id.lower()}") if current_run else f"agent/{issue_id.lower()}"
         if worktree_path and self._config.github_token:
