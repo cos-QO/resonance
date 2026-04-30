@@ -79,6 +79,7 @@ To wipe credentials and runtime state: `./wizard.sh wipe`
 | `p` | Set or change project scope |
 | `Tab` | Cycle run selection |
 | `Enter` | Open detail modal for selected run |
+| `o` | Open waiting run in Claude Code — launches new terminal at worktree, clipboard-primes initial message |
 | `f` | Send feedback to selected agent |
 | `a` | Approve / resume selected run |
 | `x` | Abort selected run |

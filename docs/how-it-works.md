@@ -479,7 +479,7 @@ The TUI is started by `./onair.sh` as `python -m tui.app`. It runs in the foregr
 Shows orchestrator health (`● orch` green/red based on PID file), count of running runs, count of waiting runs, count of failed runs.
 
 **Attention section** (hidden when empty)
-Appears when human action is needed. Entries: local runs in `waiting_human` (shows pending question), and Linear issues in Human Review state (shows title). Suggested keyboard actions shown inline.
+Appears when human action is needed. Entries: local runs in `waiting_human` (shows pending question), and Linear issues in Human Review state (shows title). Suggested keyboard actions shown inline: [o] open, [f] feedback, [a] approve.
 
 **Active Runs table**
 All runs with an active status. Columns: issue ID (with `>` prefix if selected), status (with spinner for running), task type, attempt/max (e.g. `1/3`), detail text (branch or wait reason), elapsed time since start. If a run has a `pending_question`, it appears on the row below in yellow.
@@ -503,6 +503,7 @@ Last 60 events from `runs/events.jsonl`, excluding system startup/shutdown event
 | `p` | Set project | Opens modal; accepts Linear project URL or UUID |
 | `Tab` | Select next run | Cycles through active runs |
 | `Enter` | Run detail | Opens modal with full run info, artifacts, handoff, manual control commands |
+| `o` | Open in Claude | Opens waiting run in a new terminal with `claude` at the worktree; optional initial message copied to clipboard |
 | `f` | Send feedback | Opens modal; queues feedback to `runs/commands.jsonl` |
 | `a` | Approve | Resumes selected run in `waiting_human` status |
 | `x` | Abort | Stops selected run permanently |

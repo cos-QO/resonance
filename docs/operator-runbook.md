@@ -320,6 +320,38 @@ Writes a `RESONANCE.md` file to the issue's worktree root with the current statu
 
 When you want to continue where Resonance left off — either because it produced partial work or hit max attempts — use the cc-resonance Claude Code plugin commands.
 
+### Opening a waiting run in Claude Code (recommended)
+
+The fastest way to take control of a waiting issue is from the TUI dashboard:
+
+1. In the TUI, press `Tab` to select the waiting run (or skip selection — `o` picks the first waiting run automatically)
+2. Press `o` — the **Open in Claude** modal appears, showing the issue, branch, and worktree path
+3. Optionally type an initial message — e.g. `"Review the implementation and suggest improvements"`. It is copied to your clipboard so you can paste it into Claude as your first message.
+4. Press `Enter` — a new terminal opens at the issue worktree with `claude` running
+
+**Once inside Claude:**
+
+Run `/reso QO-42` (replace with the actual issue ID) as your first message. It loads the full issue context — Linear hierarchy, all comments, local memory, and the `RESONANCE.md` checkpoint — directly into the session.
+
+From there:
+- Review what the agent built, ask questions, run tests
+- Make edits directly in the worktree (it's a real git branch — `agent/QO-42`)
+- Send feedback back to the agent: type your notes and they accumulate for the next iteration
+
+If you want Resonance to **not** resume when you're done editing:
+
+```bash
+resonance pause QO-42      # stop the orchestrator run first
+```
+
+Then in Claude: `/reso-takeover QO-42` — posts `[HUMAN TAKEOVER]` to Linear, locks the run.
+
+When you're finished: `/reso-handback "what I did"` — commits your work, posts a handback comment, and updates the Linear state. To hand back to Resonance:
+
+```bash
+resonance approve QO-42    # resume the orchestrator run
+```
+
 ### Starting a new project (PEP)
 
 In any Claude Code session:
