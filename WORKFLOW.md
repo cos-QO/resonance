@@ -144,6 +144,9 @@ task_types:
   # designs, extract specs, and match tokens — it never writes to Figma.
   # Iterative by nature. Visual review required.
   design_to_code:
+    # Agents work inside connect-ui (the real platform repo) for all frontend tasks.
+    # Set CONNECT_UI_PATH in .env to the absolute path of your local connect-ui clone.
+    target_repo_path: "${CONNECT_UI_PATH}"
     detection:
       labels: [design]
       # Figma link in issue description is expected but not enforced.
@@ -177,6 +180,7 @@ task_types:
   # ── frontend_feature ────────────────────────────────────────────────────────
   # New UI feature from a Linear spec. May or may not have a Figma reference.
   frontend_feature:
+    target_repo_path: "${CONNECT_UI_PATH}"
     detection:
       labels: [frontend]
       excludes: [bug]
@@ -203,6 +207,7 @@ task_types:
   # ── frontend_bug ─────────────────────────────────────────────────────────────
   # UI regression or visual defect. Reproduction steps required.
   frontend_bug:
+    target_repo_path: "${CONNECT_UI_PATH}"
     detection:
       labels: [bug, frontend]
     skills:

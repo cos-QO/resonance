@@ -214,9 +214,25 @@ class Poller:
             except Exception:
                 pass
 
+        # Resolve target repo — frontend/design tasks work inside connect-ui, not here.
+        # task_cfg may have target_repo_env: "CONNECT_UI_PATH" or target_repo_path: "/abs/path"
+        target_repo_path: Optional[str] = None
+        _trp = task_cfg.get("target_repo_path", "")
+        if _trp:
+            from .config import _interpolate_env
+            _trp = _interpolate_env(str(_trp))
+        if _trp and Path(_trp).is_dir():
+            target_repo_path = _trp
+        elif _trp:
+            logger.warning("target_repo_path '%s' not found — falling back to local repo", _trp)
+
         # Worktree
         try:
-            worktree = self._workspace.create(issue_id, is_block=(task_type == "block"))
+            worktree = self._workspace.create(
+                issue_id,
+                is_block=(task_type == "block"),
+                target_repo_path=target_repo_path,
+            )
         except Exception:
             logger.exception("workspace creation failed issue=%s", issue_id)
             return False
@@ -237,6 +253,7 @@ class Poller:
             branch=branch,
             log_file=log_file,
             linear_uuid=issue["id"],
+            target_repo_path=target_repo_path,
         )
 
         # Initialise local memory context
@@ -1159,7 +1176,11 @@ Keep it under 50 lines. Write only the file — no other output."""
                 write_event(issue_id, "run_archived", reason="issue_deleted_from_linear")
                 try:
                     run_data = run_state.get_run(issue_id) or {}
-                    self._workspace.remove(issue_id, is_block=(run_data.get("task_type") == "block"))
+                    self._workspace.remove(
+                        issue_id,
+                        is_block=(run_data.get("task_type") == "block"),
+                        target_repo_path=run_data.get("target_repo_path"),
+                    )
                 except Exception:
                     logger.warning("workspace cleanup failed issue=%s", issue_id)
                 continue
@@ -1178,7 +1199,11 @@ Keep it under 50 lines. Write only the file — no other output."""
                 if linear_state in cleanup_states:
                     try:
                         run_data = run_state.get_run(issue_id) or {}
-                        self._workspace.remove(issue_id, is_block=(run_data.get("task_type") == "block"))
+                        self._workspace.remove(
+                            issue_id,
+                            is_block=(run_data.get("task_type") == "block"),
+                            target_repo_path=run_data.get("target_repo_path"),
+                        )
                     except Exception:
                         logger.warning("workspace cleanup failed issue=%s", issue_id)
 

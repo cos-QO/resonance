@@ -41,6 +41,7 @@ def create_run(
     branch: str,
     log_file: str,
     linear_uuid: str = "",
+    target_repo_path: Optional[str] = None,
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with _lock:
@@ -52,6 +53,7 @@ def create_run(
             "worktree": worktree,
             "branch": branch,
             "linear_uuid": linear_uuid,   # Linear UUID for API calls; issue_id is the display identifier
+            "target_repo_path": target_repo_path,  # external repo path for multi-repo tasks
             "pid": None,
             "iteration": 1,
             "attempt": 1,
