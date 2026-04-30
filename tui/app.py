@@ -2024,15 +2024,18 @@ class ResonanceDashboard(App):
             try:
                 from orchestrator import state as run_state
                 result = run_state.clear_session(clear_events=True)
-                msg = f"Session cleared — {result['runs_removed']} run(s) removed"
+                removed = result["runs_removed"]
+                msg = f"Cleared {removed} run(s)" if removed else "Nothing to clear"
                 if result["events_cleared"]:
-                    msg += ", event log wiped"
+                    msg += " · event log wiped"
                 self.notify(msg, severity="information")
-                # Also clear the live event log widget
+                # Clear live event log and reset any cached attention state
                 try:
                     self.query_one("#events_log").clear()
                 except Exception:
                     pass
+                self._cached_events.clear()
+                self._selected_id = None
                 self._tick()
             except Exception as exc:
                 self.notify(f"Cleanup failed: {exc}", severity="error")

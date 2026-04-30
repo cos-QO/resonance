@@ -93,12 +93,22 @@ def get_all_runs() -> dict[str, dict]:
 
 
 def clear_session(clear_events: bool = True) -> dict:
-    """Clear completed/failed runs and optionally wipe the event log.
-    Returns {"runs_removed": N, "events_cleared": bool}."""
+    """Clear non-running runs and optionally wipe the event log.
+
+    Removes:
+    - Terminal statuses (failed, complete, archived)
+    - Stuck active statuses with no live worker: waiting_human, needs_input,
+      paused, monitoring
+    Preserves:
+    - 'running' — has an active subprocess; only the orchestrator can kill it
+
+    Returns {"runs_removed": N, "events_cleared": bool}.
+    """
+    _clearable = TERMINAL_STATUSES | {"waiting_human", "needs_input", "paused", "monitoring"}
     with _lock:
         data = _load()
         before = len(data)
-        data = {k: v for k, v in data.items() if v["status"] not in TERMINAL_STATUSES}
+        data = {k: v for k, v in data.items() if v["status"] not in _clearable}
         _save(data)
         removed = before - len(data)
 

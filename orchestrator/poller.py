@@ -926,6 +926,17 @@ class Poller:
             except Exception:
                 continue
             if not issue:
+                # Issue was deleted from Linear — stop and archive
+                logger.info("reconcile: issue deleted from Linear, archiving run issue=%s", issue_id)
+                runner = self._runners.pop(issue_id, None)
+                if runner:
+                    runner.kill()
+                run_state.update_run(issue_id, status="archived")
+                write_event(issue_id, "run_archived", reason="issue_deleted_from_linear")
+                try:
+                    self._workspace.remove(issue_id)
+                except Exception:
+                    logger.warning("workspace cleanup failed issue=%s", issue_id)
                 continue
 
             linear_state = issue["state"]["name"]
