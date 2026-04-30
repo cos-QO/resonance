@@ -22,7 +22,7 @@ from . import tracer
 
 logger = logging.getLogger(__name__)
 
-SIGNAL_PATTERN = re.compile(r"AGENT_SIGNAL:\s*(\{.*\})")
+_SIGNAL_MARKER = "AGENT_SIGNAL:"
 
 
 def _describe_tool_call(tool_name: str, tool_input: dict) -> tuple[str, str]:
@@ -292,13 +292,25 @@ class Runner:
             )
 
     def _scan_for_signal(self, text: str) -> None:
-        for match in SIGNAL_PATTERN.finditer(text):
+        # Use raw_decode so multi-line formatted JSON (pretty-printed by the agent) is
+        # handled correctly.  The old single-line regex missed signals whose JSON payload
+        # contained embedded newlines, which caused "no signal on clean exit" false
+        # failures and triggered unnecessary retries that duplicated block creation.
+        pos = 0
+        while True:
+            idx = text.find(_SIGNAL_MARKER, pos)
+            if idx == -1:
+                break
+            json_start = text.find("{", idx + len(_SIGNAL_MARKER))
+            if json_start == -1:
+                break
             try:
-                signal = json.loads(match.group(1))
+                signal, _ = json.JSONDecoder().raw_decode(text, json_start)
                 self._last_signal = signal
                 self._handle_signal(signal)
             except json.JSONDecodeError:
                 logger.warning("malformed AGENT_SIGNAL in output")
+            pos = json_start + 1
 
     def _handle_signal(self, signal: dict) -> None:
         sig_type = signal.get("type")
