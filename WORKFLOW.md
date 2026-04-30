@@ -140,8 +140,9 @@ task_types:
       criteria. Moves all phase issues to Plan Approved. Posts a summary comment.
 
   # ── design_to_code ──────────────────────────────────────────────────────────
-  # Figma specification → built component or screen.
-  # Iterative by nature. Visual review required. Figma MCP loaded.
+  # Figma reference → built component or screen. Agent reads Figma to inspect
+  # designs, extract specs, and match tokens — it never writes to Figma.
+  # Iterative by nature. Visual review required.
   design_to_code:
     detection:
       labels: [design]
@@ -160,7 +161,7 @@ task_types:
     worker: claude-sonnet
     mcp:
       - linear             # always required
-      - figma              # required for design_to_code
+      - figma              # read-only: inspect designs, extract specs/tokens
     # Artifacts the agent MUST produce before Agent Feedback Needed state is valid.
     # Orchestrator will not transition state until these are present in the run log.
     artifacts_required:

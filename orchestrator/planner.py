@@ -478,6 +478,28 @@ needed, conflicting requirements, external dependency unavailable):
 
 ---
 
+## Diagrams
+
+When a diagram would clarify architecture, flows, or relationships — in a Linear comment
+or in a documentation file — write a Mermaid code block directly:
+
+````markdown
+```mermaid
+graph TD
+  A[Start] --> B[Step]
+```
+````
+
+Linear renders Mermaid natively. For docs, Mermaid is standard markdown.
+If you need a rendered image URL (e.g. to embed in a README or Slack), fetch one from
+kroki.io: `POST https://kroki.io/mermaid/svg` with the diagram as plain text body.
+
+## Figma references
+
+If the block description contains a Figma URL, use the figma MCP to inspect the design:
+extract colours, spacing, component names, and layout — then implement to match.
+You cannot write to Figma; it is read-only reference material.
+
 ## Rules
 - Never signal block_complete unless every task checkbox is checked and every criterion verified
 - Keep commits atomic — one logical change per commit
