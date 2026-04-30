@@ -358,11 +358,15 @@ Include everything an agent needs — it only has the codebase and this descript
 
 ---
 
-## Step 4 — Set blocking relations
+## Step 4 — Determine blocking relations
 
-For each block that depends on another block, call `mcp__linear__linear_create_issue_relation`:
-- For "B2 depends on B1": relation where B1 blocks B2
-  - The issueId is the BLOCKER (B1), relatedIssueId is the BLOCKED (B2), type "blocks"
+Do NOT attempt to call any Linear relation tool — set relations are handled by the orchestrator.
+
+Instead, for each block that depends on another, record which block UUIDs it is blocked by.
+You will include this in the signal at Step 7. Example:
+  - B2 depends on B1 → B2's blocked_by_ids = [B1's UUID]
+  - B3 depends on B2 → B3's blocked_by_ids = [B2's UUID]
+  - B1 has no dependencies → B1's blocked_by_ids = []
 
 ---
 
@@ -407,13 +411,23 @@ Each block will be implemented and self-verified by an agent, then moved to Huma
 
 ## Step 7 — Signal completion
 
-Output EXACTLY:
+Output EXACTLY one `AGENT_SIGNAL` line with ALL blocks included. The `blocked_by_ids` field is
+**required** for every block and must be populated with actual blocker UUIDs — do NOT leave it
+empty unless the block truly has no dependencies.
 
-`AGENT_SIGNAL: {{"type": "blocks_created", "core_plan_id": "{issue_id}", "blocks": [{{"id": "<uuid>", "identifier": "<identifier>", "title": "<title>", "blocked_by_ids": []}}]}}`
+Example with real dependencies:
+```
+AGENT_SIGNAL: {{"type": "blocks_created", "core_plan_id": "RND-54", "blocks": [
+  {{"id": "uuid-b1", "identifier": "RND-55", "title": "B1 title", "blocked_by_ids": []}},
+  {{"id": "uuid-b2", "identifier": "RND-56", "title": "B2 title", "blocked_by_ids": ["uuid-b1"]}},
+  {{"id": "uuid-b3", "identifier": "RND-57", "title": "B3 title", "blocked_by_ids": ["uuid-b2"]}}
+]}}
+```
 
+Fields:
 - `id`: Linear UUID returned when you created the block issue
 - `identifier`: e.g. "RND-42"
-- `blocked_by_ids`: list of block UUIDs that block this one (empty list if none)
+- `blocked_by_ids`: list of block UUIDs that must complete before this block starts ([] only if truly independent)
 
 Do not end this session without emitting this signal.
 
@@ -439,12 +453,24 @@ def build_block_execution_prompt(issue: dict, task_cfg: dict) -> str:
     return f"""\
 # Block Execution Agent — {issue_id}: {title}
 
-You are a Resonance execution agent. Implement this block completely, verify your
-own work, then signal done. One block = one PR.
+You are a Resonance execution agent. Implement this block completely as part of the
+shared project codebase, verify your own work, then signal done.
 
 ## Block Specification
 
 {description if description else "_No description provided._"}
+
+---
+
+## Workspace
+
+Your working directory is the **shared project output** (`$MAIN_PATH`). All code, files, and
+commits go here — every block in this project builds on the same codebase.
+
+For notes, downloaded assets, or local data specific to this block, write to `$ISSUE_PATH`.
+Nothing in `$ISSUE_PATH` is pushed to GitHub.
+
+When reading prior work from earlier blocks, read files in your CWD (= `$MAIN_PATH`).
 
 ---
 
@@ -459,10 +485,14 @@ For each task in the **Tasks** section:
 
 1. Implement the task (code, tests, config).
 2. Commit with a focused message.
-3. Update the issue description to check off the task:
-   - Fetch current description via `mcp__linear__linear_search_issues_by_identifier` with identifier `{issue_id}`
-   - Replace `- [ ] <task text>` with `- [x] <task text>` in the description
-   - Update via `mcp__linear__linear_bulk_update_issues` with `ids: ["{issue_uuid}"]` and the updated description
+3. Update the issue description to check off the completed task:
+   - Fetch the current description via `mcp__linear__linear_search_issues_by_identifier` with identifier `{issue_id}`
+   - In the description, replace `- [ ] <exact task text>` with `- [x] <exact task text>`
+   - Call `mcp__linear__linear_bulk_update_issues` with:
+     ```json
+     {{"issueIds": ["{issue_uuid}"], "update": {{"description": "<full updated description>"}}}}
+     ```
+   - Pass the COMPLETE updated description string — not just the changed line.
 4. Post a brief comment via `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`:
    ```
    ✅ Task done: <task name>  · <elapsed, e.g. "4 min in">
@@ -505,7 +535,7 @@ needed, conflicting requirements, external dependency unavailable):
    resonance attach {issue_id}
    resonance feedback {issue_id} "your instructions here"
    ```
-   Worktree has all current changes committed. Branch: agent/{issue_id}
+   Worktree has all current changes committed. Branch: agent/{issue_id}  (working in $MAIN_PATH)
    ```
 
 2. Signal:

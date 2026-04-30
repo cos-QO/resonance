@@ -67,6 +67,7 @@ Human Review → Done
 | GitHub branch links | Block Done comment and "all blocks complete" comment include branch URLs |
 | Haiku log agent | `_spawn_log_agent()` spawns `claude-haiku` after each block/plan run; writes `RUNLOG.md` |
 | Project-grouped workspaces | `WorkspaceManager` now groups worktrees as `workspaces/{project-slug}/issues/{id}` |
+| Shared main/ workspace for blocks | All block agents now work in a single `main/` worktree (`$MAIN_PATH`); `issues/` folders hold per-block metadata (`$ISSUE_PATH`) |
 
 ### Verified working (live tests)
 
@@ -141,7 +142,10 @@ Each Block Execution Agent:
 
 ### Step 6 — Review and approve
 
-Review the branch in your worktree. With a project scoped, path is `workspaces/<project-slug>/issues/<issue-id>/` (e.g. `workspaces/D2D-Demo-gorgon/issues/RND-47/`). The block Done comment includes a direct GitHub branch link.
+Review the branch in your worktree. With a project scoped, all block agents work in the shared
+worktree at `workspaces/<project-slug>/main/` (`$MAIN_PATH`). Per-block scratch data is stored
+in `workspaces/<project-slug>/issues/<issue-id>/` (`$ISSUE_PATH`). The block Done comment
+includes a direct GitHub branch link.
 
 ```bash
 resonance attach RND-47    # prints exact worktree path + log file

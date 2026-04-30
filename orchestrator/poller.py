@@ -13,6 +13,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
+
+_NY = ZoneInfo("America/New_York")
 
 from .classifier import classify
 from .config import Config
@@ -203,10 +206,16 @@ class Poller:
 
         # Worktree
         try:
-            worktree = self._workspace.create(issue_id)
+            worktree = self._workspace.create(issue_id, is_block=(task_type == "block"))
         except Exception:
             logger.exception("workspace creation failed issue=%s", issue_id)
             return False
+
+        # Branch: blocks share a project-level branch; everything else gets agent/{issue_id}
+        if task_type == "block" and self._workspace._project_slug:
+            branch = f"agent/{self._workspace._project_slug.lower()}"
+        else:
+            branch = f"agent/{issue_id}"
 
         # Run state
         log_file = make_log_path(issue_id)
@@ -215,7 +224,7 @@ class Poller:
             task_type=task_type,
             worker=task_cfg.get("worker", self._config.workflow["worker"]["default"]),
             worktree=str(worktree),
-            branch=f"agent/{issue_id}",
+            branch=branch,
             log_file=log_file,
             linear_uuid=issue["id"],
         )
@@ -258,7 +267,7 @@ class Poller:
             logger.warning("could not add RES label to issue=%s (continuing)", issue_id)
 
         # Post start comment per task type (with timestamp + estimate)
-        now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        now_str = datetime.now(_NY).strftime("%-I:%M %p ET")
         _estimates = {
             "pep":              "3–7 min",
             "core_plan":        "5–12 min",
@@ -715,7 +724,8 @@ class Poller:
 
             try:
                 self._linear.set_issue_state(issue["id"], issue["team"]["id"], "Done")
-                branch = f"agent/{issue_id.lower()}"
+                _run_for_branch = run_state.get_run(issue_id)
+                branch = _run_for_branch.get("branch", f"agent/{issue_id.lower()}") if _run_for_branch else f"agent/{issue_id.lower()}"
                 github_url = f"{self._github_remote}/tree/{branch}" if self._github_remote else ""
                 github_line = f"\n🔗 [View branch on GitHub]({github_url})" if github_url else ""
                 lines = ["✅ Block complete and verified.", ""]
@@ -727,10 +737,10 @@ class Poller:
             except Exception:
                 logger.exception("failed to mark block Done issue=%s", issue_id)
 
-        # Push branch to GitHub
+        # Push branch to GitHub (use stored branch — blocks share agent/{project-slug})
         current_run = run_state.get_run(issue_id)
         worktree_path = current_run.get("worktree", "") if current_run else ""
-        branch = f"agent/{issue_id.lower()}"
+        branch = current_run.get("branch", f"agent/{issue_id.lower()}") if current_run else f"agent/{issue_id.lower()}"
         if worktree_path and self._config.github_token:
             try:
                 push_result = subprocess.run(
@@ -1078,7 +1088,8 @@ Keep it under 50 lines. Write only the file — no other output."""
                 run_state.update_run(issue_id, status="archived")
                 write_event(issue_id, "run_archived", reason="issue_deleted_from_linear")
                 try:
-                    self._workspace.remove(issue_id)
+                    run_data = run_state.get_run(issue_id) or {}
+                    self._workspace.remove(issue_id, is_block=(run_data.get("task_type") == "block"))
                 except Exception:
                     logger.warning("workspace cleanup failed issue=%s", issue_id)
                 continue
@@ -1096,7 +1107,8 @@ Keep it under 50 lines. Write only the file — no other output."""
                 # Clean up worktree per WORKFLOW.md cleanup_on policy
                 if linear_state in cleanup_states:
                     try:
-                        self._workspace.remove(issue_id)
+                        run_data = run_state.get_run(issue_id) or {}
+                        self._workspace.remove(issue_id, is_block=(run_data.get("task_type") == "block"))
                     except Exception:
                         logger.warning("workspace cleanup failed issue=%s", issue_id)
 

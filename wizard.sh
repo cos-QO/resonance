@@ -908,6 +908,7 @@ PYEOF
     fi
 
     # Fix tool.types.js — add projectId/parentId/stateId/labelIds to linear_create_issue schema
+    # and description to linear_bulk_update_issues update object
     local types_js
     types_js="$(dirname "$auth_js")/core/types/tool.types.js"
     if [[ -f "$types_js" ]]; then
@@ -960,6 +961,57 @@ PYEOF
         ((fixed_count++))
       else
         ok "linear-mcp tool.types.js  (create_issue schema complete)"
+      fi
+
+      # Check and patch description field in linear_bulk_update_issues update schema
+      if grep -q '"description"' "$types_js" 2>/dev/null && \
+         python3 - "$types_js" <<'PYEOF' 2>/dev/null | grep -q "HAS_DESC"; then
+import sys, re
+content = open(sys.argv[1]).read()
+# Check if description is present inside the bulk_update_issues update properties block
+# We look for the pattern near the priority field (which is in the update object)
+bulk_section = re.search(r'linear_bulk_update_issues.*?required.*?issueIds.*?update', content, re.DOTALL)
+if bulk_section:
+    snippet = content[bulk_section.start():bulk_section.start()+1500]
+    if '"description"' in snippet or "'description'" in snippet:
+        print('HAS_DESC')
+PYEOF
+        ok "linear-mcp tool.types.js  (bulk_update_issues description field present)"
+      else
+        info "Patching linear-mcp tool.types.js: adding description to linear_bulk_update_issues update schema..."
+        "$VENV_DIR/bin/python" - "$types_js" <<'PYEOF'
+import sys, re
+
+path = sys.argv[1]
+content = open(path).read()
+
+# Insert description field after priority in the bulk_update update object
+insert_after = '''                        priority: {
+                            type: "number",
+                            description: "New priority (0-4)",
+                            optional: true,
+                        },'''
+
+description_field = '''                        description: {
+                            type: "string",
+                            description: "New issue description (markdown). Use to update checkboxes: replace '- [ ] task' with '- [x] task'.",
+                            optional: true,
+                        },'''
+
+if 'New issue description (markdown)' not in content:
+    # Find the bulk_update section and patch only there
+    idx = content.find(insert_after)
+    if idx != -1:
+        content = content[:idx + len(insert_after)] + '\n' + description_field + content[idx + len(insert_after):]
+        open(path, 'w').write(content)
+        print('patched')
+    else:
+        print('insert_point_not_found')
+else:
+    print('already patched')
+PYEOF
+        ok "linear-mcp tool.types.js patched (bulk_update_issues now accepts description)"
+        ((fixed_count++))
       fi
     fi
   else
