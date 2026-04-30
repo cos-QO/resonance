@@ -246,7 +246,7 @@ class LinearClient:
                 labels { nodes { id name } }
                 team { id name }
                 url
-                inverseRelations {
+                relations {
                   nodes {
                     type
                     relatedIssue { id identifier state { name } }

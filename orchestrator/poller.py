@@ -696,12 +696,14 @@ class Poller:
     def _check_active_blockers(self, issue: dict) -> list[dict]:
         """Return blocking issues that are not yet Done/Cancelled.
 
-        Uses inverseRelations (type='blocks') fetched by get_issue().
+        Uses relations (type='blocked_by') fetched by get_issue().
+        Linear creates a 'blocked_by' relation on the blocked issue with
+        relatedIssue pointing to the blocker — so this is the correct field.
+        (inverseRelations.relatedIssue points to the issue itself, not the blocker.)
         """
         blockers = []
-        inverse = (issue.get("inverseRelations") or {}).get("nodes", [])
-        for rel in inverse:
-            if rel.get("type") != "blocks":
+        for rel in (issue.get("relations") or {}).get("nodes", []):
+            if rel.get("type") != "blocked_by":
                 continue
             related = rel.get("relatedIssue", {})
             state_name = (related.get("state") or {}).get("name", "")
@@ -713,7 +715,12 @@ class Poller:
         """Log and (once) post a [PM] comment when a plan is held for dependencies."""
         blocker_ids = ", ".join(b.get("identifier", b["id"][:8]) for b in blockers)
         logger.info("issue=%s blocked by %s — skipping this tick", issue_id, blocker_ids)
-        write_event(issue_id, "run_blocked", blocked_by=blocker_ids)
+
+        # Emit run_blocked event only when the blocker set changes (suppress per-tick spam)
+        prev_key = f"_blocked_key_{issue_id}"
+        if getattr(self, prev_key, None) != blocker_ids:
+            setattr(self, prev_key, blocker_ids)
+            write_event(issue_id, "run_blocked", blocked_by=blocker_ids)
 
         if issue_id not in self._blocked_notified:
             self._blocked_notified.add(issue_id)
