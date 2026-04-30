@@ -2049,8 +2049,11 @@ class ResonanceDashboard(App):
 
     def action_manual_refresh(self) -> None:
         self._tick()
+        self._draw_pipeline()
+        self.notify("Refreshed", timeout=1.0)
 
     def action_refresh_linear(self) -> None:
+        self.notify("Fetching from Linear…", timeout=3.0)
         threading.Thread(target=self._linear._fetch, daemon=True).start()
 
     def action_select_next(self) -> None:
