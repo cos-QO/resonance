@@ -27,7 +27,7 @@ from .planner import (
     is_plan_issue,
 )
 from .runner import Runner, RunResult, build_prompt, make_log_path
-from .workspace import WorkspaceManager
+from .workspace import WorkspaceManager, slugify
 from . import memory as issue_memory
 from . import state as run_state
 
@@ -41,7 +41,21 @@ class Poller:
     def __init__(self, config: Config):
         self._config = config
         self._linear = LinearClient(config.linear_api_key)
-        self._workspace = WorkspaceManager(config)
+
+        # Resolve project slug for workspace path grouping.
+        # With project: workspaces/{slug}/issues/{id}
+        # Without:      workspaces/{team_prefix}/{id}  (legacy)
+        project_slug: Optional[str] = None
+        if config.linear_project_id:
+            try:
+                proj = self._linear.get_project(config.linear_project_id)
+                if proj and proj.get("name"):
+                    project_slug = slugify(proj["name"])
+                    logger.info("workspace grouping under project slug=%s", project_slug)
+            except Exception:
+                logger.warning("could not fetch project name for workspace slug; using team prefix")
+
+        self._workspace = WorkspaceManager(config, project_slug=project_slug)
         # issue_id → active Runner
         self._runners: dict[str, Runner] = {}
         # issue identifiers we've already posted a "blocked" [PM] comment on

@@ -300,9 +300,15 @@ workspace:
   # All worktrees are created here. Directory is gitignored.
   base_dir: workspaces/
 
-  # Workspace directory is grouped by team prefix, then issue identifier.
-  # Example: workspaces/QO/QO-123
-  naming: "{team_prefix}/{issue_id}"
+  # Workspace paths depend on whether a project is scoped (LINEAR_PROJECT_ID set):
+  #
+  #   With project:   workspaces/{project-slug}/issues/{issue_id}
+  #   Without project: workspaces/{team_prefix}/{issue_id}   (team-level fallback)
+  #
+  # {project-slug} is the Linear project name slugified (spaces/punctuation → hyphens).
+  # Example (project scoped):  workspaces/D2D-Demo-gorgon/issues/RND-47
+  # Example (no project):      workspaces/RND/RND-47
+  naming: "{team_prefix}/{issue_id}"  # used only when no project is scoped
 
   # Each issue gets an isolated git worktree on its own branch.
   isolation: git_worktree

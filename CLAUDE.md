@@ -112,7 +112,7 @@ pip install -e .
 
 1. Poll Linear every 15s for issues in `Plan Approved` state
 2. Classify issue by label → task type (`design_to_code`, `frontend_feature`, `frontend_bug`, `backend_feature`, `backend_bug`, `plan`)
-3. Create a git worktree at `workspaces/{team_prefix}/{issue_id}` on branch `agent/{issue_id}`
+3. Create a git worktree at `workspaces/{project-slug}/issues/{issue_id}` (or `workspaces/{team_prefix}/{issue_id}` if no project scoped) on branch `agent/{issue_id}`
 4. Build prompt and launch `claude -p --output-format stream-json --permission-mode bypassPermissions`
 5. Parse `AGENT_SIGNAL: {"type": "..."}` events from stdout to detect state transitions
 6. On `ready_for_review` → move Linear issue to `Human Review`, post summary comment
@@ -196,7 +196,16 @@ paused  → running       (on approve)
 
 ### Workspace isolation
 
-Each issue gets a git worktree (`workspaces/{team_prefix}/{issue_id}`) with its own branch (`agent/{issue_id}`). The orchestrator writes a `.claude/settings.json` into the worktree with absolute paths to the shared plugin dirs (`.claude/cc-pipeline`, `.claude/cc-qo-skills`) and `.mcp.json`. The `ISSUE_ID` env var is injected into every worker session.
+Each issue gets a git worktree on its own branch (`agent/{issue_id}`). Path structure:
+
+| Condition | Worktree path |
+|---|---|
+| Project scoped (`LINEAR_PROJECT_ID` set) | `workspaces/{project-slug}/issues/{issue_id}` |
+| No project (team-level polling) | `workspaces/{team_prefix}/{issue_id}` |
+
+`{project-slug}` is the Linear project name with spaces/punctuation replaced by hyphens (e.g. "D2D Demo-gorgon" → `D2D-Demo-gorgon`). A `PROJECT` marker file is written to the project root on first issue creation.
+
+The orchestrator writes a `.claude/settings.json` into each worktree with absolute paths to the shared plugin dirs (`.claude/cc-pipeline`, `.claude/cc-qo-skills`) and `.mcp.json`. The `ISSUE_ID` env var is injected into every worker session.
 
 Worktrees are cleaned up when the Linear issue reaches `Done` or `Cancelled`.
 
@@ -249,7 +258,7 @@ Workers are prompted with their available skills in the `## Skills Available` se
 
 ## QO Design System Reference
 
-`.claude/memory/standards/connectui-design-system.md` — authoritative token reference (colors, typography, spacing, shape, component list) derived from the connect-ui repo design tokens. Workers access this via an absolute symlink at `workspaces/{team_prefix}/{issue_id}/.claude/memory` → `<repo-root>/.claude/memory`.
+`.claude/memory/standards/connectui-design-system.md` — authoritative token reference (colors, typography, spacing, shape, component list) derived from the connect-ui repo design tokens. Workers access this via an absolute symlink at `{worktree-path}/.claude/memory` → `<repo-root>/.claude/memory`.
 
 `.claude/memory/standards/connectui-stack.md` — technology stack reference (React, MUI v7, TanStack, Zustand, Firebase, conventions).
 

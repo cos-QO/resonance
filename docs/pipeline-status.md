@@ -1,6 +1,6 @@
 # Resonance Pipeline — Current State & Roadmap
 
-*Last updated: 2026-04-30*
+*Last updated: 2026-04-30 (session 3)*
 
 ---
 
@@ -38,8 +38,15 @@ Human Review → Done
 | Linear MCP in workers | ✅ Fixed | Agents can create/update Linear issues from within worktree |
 | Signal protocol | ✅ Working | `pep_decomposed`, `blocks_created`, `block_complete`, `human_input_needed`, `ready_for_review` |
 | Human-in-the-loop plugin | ✅ Working | `/reso`, `/reso-takeover`, `/reso-handback` |
+| ET timestamps in agent comments | ✅ Working | All agent-posted times use New York timezone (%-I:%M %p ET) |
+| Auto-push to GitHub on block done | ✅ Working | `git push -u origin agent/<id>` when `GITHUB_TOKEN` is set |
+| GitHub branch links in Linear comments | ✅ Working | Block Done + final "all blocks complete" comments include branch URLs |
+| Haiku log agent (`RUNLOG.md`) | ✅ Working | Lightweight Haiku subprocess writes handoff log per block/plan run |
+| Project-grouped workspaces | ✅ Working | `workspaces/{project-slug}/issues/{issue-id}` when project is scoped |
 
-### What was fixed this session
+### What was built across sessions
+
+**Session 2 — MCP fixes + wizard.sh**
 
 | Bug | Root cause | Fix |
 |---|---|---|
@@ -50,6 +57,16 @@ Human Review → Done
 | Core Plan not in project after creation | Agent couldn't set `projectId` (schema gap) | Poller now patches `projectId` + `parentId` post-creation as safety net |
 | `.env` multi-word values unquoted | `source .env` fails on `Plan Approved` | Values now properly quoted |
 | `wizard.sh` missing (replaced `setup.sh`) | `setup.sh` was monolithic, no menu | `wizard.sh` with interactive menu + check + test commands |
+
+**Session 3 — Post-demo improvements**
+
+| Feature | What changed |
+|---|---|
+| ET timestamps | Agent comments now show `%-I:%M %p ET` (New York) instead of UTC |
+| Auto-push to GitHub | `_finish_block_done` runs `git push -u origin agent/<id>` when `GITHUB_TOKEN` is set |
+| GitHub branch links | Block Done comment and "all blocks complete" comment include branch URLs |
+| Haiku log agent | `_spawn_log_agent()` spawns `claude-haiku` after each block/plan run; writes `RUNLOG.md` |
+| Project-grouped workspaces | `WorkspaceManager` now groups worktrees as `workspaces/{project-slug}/issues/{id}` |
 
 ### Verified working (live tests)
 
@@ -124,7 +141,13 @@ Each Block Execution Agent:
 
 ### Step 6 — Review and approve
 
-Review the branch at `workspaces/RND/<issue-id>/`. Merge when satisfied. Move the block to **Done**. When all blocks are Done, the Core Plan moves to Human Review. Move that to Done when satisfied.
+Review the branch in your worktree. With a project scoped, path is `workspaces/<project-slug>/issues/<issue-id>/` (e.g. `workspaces/D2D-Demo-gorgon/issues/RND-47/`). The block Done comment includes a direct GitHub branch link.
+
+```bash
+resonance attach RND-47    # prints exact worktree path + log file
+```
+
+Merge when satisfied. Move the block to **Done**. When all blocks are Done, the Core Plan moves to Human Review. Move that to Done when satisfied.
 
 ---
 
@@ -134,16 +157,15 @@ Review the branch at `workspaces/RND/<issue-id>/`. Merge when satisfied. Move th
 
 | Item | Why | Notes |
 |---|---|---|
-| MCP health indicators in TUI | Can't tell if Linear/Figma/GitHub MCP is reachable without running a test | Discussed: header-bar colored dots, background check every 2 min |
-| Validate block execution end-to-end | PEP → Core Plan → Blocks is working; need to confirm a Block agent actually commits code | Requires a real implementation task |
-| GitHub MCP for PR creation | `GITHUB_TOKEN` is set; PR creation is manual right now | `mcp__github__*` tools, or `gh` CLI in worker |
+| Validate block execution end-to-end | PEP → Core Plan → Blocks is working; need to confirm a Block agent actually commits real code | Requires a real implementation task |
+| GitHub MCP for PR creation | Branch is auto-pushed; PR creation is still manual | `gh` CLI in worker, or `mcp__github__*` tools |
+| MCP health indicators in TUI | Can't tell if Linear/Figma/GitHub MCP is reachable without running a test | Header-bar colored dots, background check every 2 min |
 
 ### Medium term
 
 | Item | Why |
 |---|---|
 | Auto-patch `linear-mcp` on npm update | Auth patch lives in `node_modules`; `wizard.sh check` will re-apply it, but user needs to remember to run it |
-| `RESONANCE.md` checkpoint on Human Review | Operators picking up a paused run need context; write state file to worktree |
 | Block-level parallelism in TUI | Currently shows runs sequentially in event stream; parallel blocks need clearer visual grouping |
 | Figma → Component prototype flow | `/qo-prototype` skill exists but hasn't been tested with the new MCP auth fix |
 | PEP template interactive creator (`/create-pep`) | Currently humans write PEPs manually; skill-assisted creation reduces friction |

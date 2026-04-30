@@ -1,12 +1,22 @@
 """
 Git worktree lifecycle management.
-Each issue gets an isolated worktree at workspaces/{team}/{issue_id} on branch agent/{issue_id}.
-The orchestrator writes a minimal .claude/settings.json pointing at shared plugin dirs.
+
+With a project scoped (LINEAR_PROJECT_ID set):
+  workspaces/{project_slug}/issues/{issue_id}   branch: agent/{issue_id}
+
+Without a project (team-level polling):
+  workspaces/{team_prefix}/{issue_id}           branch: agent/{issue_id}
+
+The project_slug is the Linear project name slugified (spaces/punctuation → hyphens).
+The orchestrator writes a minimal .claude/settings.json into each worktree.
 """
 import json
 import logging
+import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from .config import Config
 from .events import write as write_event
@@ -14,11 +24,19 @@ from .events import write as write_event
 logger = logging.getLogger(__name__)
 
 
+def slugify(name: str) -> str:
+    """Convert a display name to a filesystem-safe slug. 'D2D Demo-gorgon' → 'D2D-Demo-gorgon'"""
+    return re.sub(r"[^a-zA-Z0-9]+", "-", name).strip("-")
+
+
 class WorkspaceManager:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, project_slug: Optional[str] = None):
         self._config = config
         self._base = Path(config.workflow["workspace"]["base_dir"])
         self._base.mkdir(parents=True, exist_ok=True)
+        # When set, worktrees live under {base}/{project_slug}/issues/{issue_id}.
+        # When None, falls back to {base}/{team_prefix}/{issue_id} (team-level polling).
+        self._project_slug = project_slug
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -35,6 +53,8 @@ class WorkspaceManager:
             return path
 
         path.parent.mkdir(parents=True, exist_ok=True)
+        if self._project_slug:
+            self._ensure_project_root()
         self._git_worktree_add(path, branch)
         self._write_agent_config(path, issue_id)
         _ensure_log_dir()
@@ -72,9 +92,23 @@ class WorkspaceManager:
         return issue_id.split("-")[0] if "-" in issue_id else issue_id
 
     def _path(self, issue_id: str) -> Path:
+        if self._project_slug:
+            return self._base / self._project_slug / "issues" / issue_id
+        # Fallback: team_prefix/issue_id — matches legacy structure for unscoped polling
         team_prefix = self._team_prefix(issue_id)
-        naming = self._config.workflow["workspace"]["naming"]
-        return self._base / naming.format(issue_id=issue_id, team_prefix=team_prefix)
+        return self._base / team_prefix / issue_id
+
+    def _ensure_project_root(self) -> None:
+        """Create project directory and write a PROJECT marker on first use."""
+        project_dir = self._base / self._project_slug
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "issues").mkdir(exist_ok=True)
+        marker = project_dir / "PROJECT"
+        if not marker.exists():
+            marker.write_text(
+                f"project: {self._project_slug}\n"
+                f"created: {datetime.now(timezone.utc).isoformat()}\n"
+            )
 
     def _branch(self, issue_id: str) -> str:
         naming = self._config.workflow["workspace"]["branch_naming"]
