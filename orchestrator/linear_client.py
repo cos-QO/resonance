@@ -540,6 +540,90 @@ class LinearClient:
         )
         return data.get("project")
 
+    def update_project(self, project_id: str, description: Optional[str] = None, name: Optional[str] = None) -> dict:
+        """Update a project's description and/or name."""
+        input_fields: dict = {}
+        if description is not None:
+            input_fields["description"] = description
+        if name is not None:
+            input_fields["name"] = name
+        if not input_fields:
+            return {}
+        data = self._query(
+            """
+            mutation UpdateProject($id: String!, $input: ProjectUpdateInput!) {
+              projectUpdate(id: $id, input: $input) {
+                success
+                project { id name }
+              }
+            }
+            """,
+            {"id": project_id, "input": input_fields},
+        )
+        result = data["projectUpdate"]
+        logger.debug("project updated id=%s success=%s", project_id, result.get("success"))
+        return result
+
+    def create_document(self, title: str, content: str, project_id: Optional[str] = None) -> dict:
+        """Create a document (appears in project Docs tab). Content is markdown."""
+        variables: dict = {"title": title, "content": content}
+        if project_id:
+            variables["projectId"] = project_id
+        data = self._query(
+            """
+            mutation CreateDocument($title: String!, $content: String!, $projectId: String) {
+              documentCreate(input: {
+                title: $title
+                content: $content
+                projectId: $projectId
+              }) {
+                success
+                document { id title url }
+              }
+            }
+            """,
+            variables,
+        )
+        result = data["documentCreate"]
+        logger.debug("document created title=%s success=%s", title, result.get("success"))
+        return result
+
+    def update_document(self, doc_id: str, title: str, content: str) -> dict:
+        """Update an existing document's title and content."""
+        data = self._query(
+            """
+            mutation UpdateDocument($id: String!, $title: String!, $content: String!) {
+              documentUpdate(id: $id, input: { title: $title, content: $content }) {
+                success
+                document { id title url }
+              }
+            }
+            """,
+            {"id": doc_id, "title": title, "content": content},
+        )
+        result = data["documentUpdate"]
+        logger.debug("document updated id=%s success=%s", doc_id, result.get("success"))
+        return result
+
+    def get_project_documents(self, project_id: str) -> list[dict]:
+        """List all documents attached to a project."""
+        data = self._query(
+            """
+            query ProjectDocuments($projectId: String!) {
+              project(id: $projectId) {
+                documents(first: 50) {
+                  nodes { id title url }
+                }
+              }
+            }
+            """,
+            {"projectId": project_id},
+        )
+        project = data.get("project")
+        if not project:
+            return []
+        return project.get("documents", {}).get("nodes", [])
+
     # ── Milestones ────────────────────────────────────────────────────────────
 
     def get_milestones(self, project_id: str) -> list[dict]:

@@ -158,6 +158,17 @@ do_setup() {
   header "Resonance Setup"
   ensure_resonance
   resonance setup
+
+  # Install Playwright browsers for Visual QA support
+  if command -v npx &>/dev/null; then
+    echo ""
+    info "Installing Playwright Chromium for Visual QA..."
+    npx --yes playwright install chromium --with-deps 2>&1 | tail -5 \
+      && ok "Playwright: Chromium ready" \
+      || warn "Playwright install failed — run: npx playwright install chromium --with-deps"
+  else
+    warn "npx not found — skipping Playwright install (install Node.js then run: npx playwright install chromium)"
+  fi
 }
 
 # ── Live integration tests ────────────────────────────────────────────────────
@@ -294,8 +305,39 @@ JSEOF
   fi
   echo ""
 
-  # ── Test 4: MCP config files ──────────────────────────────────────────────────
-  echo -e "${BOLD}[4/4]${RESET}  MCP config files"
+  # ── Test 4: Playwright (Visual QA) ──────────────────────────────────────────
+  echo -e "${BOLD}[4/5]${RESET}  Playwright (Visual QA)"
+  if ! command -v npx &>/dev/null; then
+    fail "npx not found — Playwright unavailable (install Node.js)"
+    ((issues++))
+  else
+    local pw_has_playwright=false
+    if [[ -f .mcp.json ]]; then
+      python3 -c "
+import json
+d = json.load(open('.mcp.json'))
+print('yes' if 'playwright' in d.get('mcpServers', d) else 'no')
+" 2>/dev/null | grep -q "yes" && pw_has_playwright=true
+    fi
+
+    if $pw_has_playwright; then
+      ok ".mcp.json: playwright MCP server configured"
+    else
+      fail ".mcp.json: playwright MCP entry missing — run ./wizard.sh check to add it"
+      ((issues++))
+    fi
+
+    if npx --yes playwright --version &>/dev/null; then
+      ok "Playwright CLI: available  ($(npx playwright --version 2>/dev/null))"
+    else
+      fail "Playwright not installed — run: npx playwright install chromium --with-deps"
+      ((issues++))
+    fi
+  fi
+  echo ""
+
+  # ── Test 5: MCP config files ──────────────────────────────────────────────────
+  echo -e "${BOLD}[5/5]${RESET}  MCP config files"
   local config_issues=0
   for f in .mcp.json .claude/cc-pipeline/.mcp.json; do
     if [[ -f "$f" ]]; then
@@ -370,7 +412,7 @@ do_check() {
   local fixed_count=0
 
   # ────────────────────────────────────────────────────────────────────────────
-  step "1/8" "Python Environment"
+  step "1/9" "Python Environment"
 
   local py
   py=$(find_python 2>/dev/null) || {
@@ -420,7 +462,7 @@ do_check() {
   fi
 
   # ────────────────────────────────────────────────────────────────────────────
-  step "2/8" "Configuration Files"
+  step "2/9" "Configuration Files"
 
   if [[ -f .env ]]; then
     ok ".env  found"
@@ -460,7 +502,7 @@ ENVEOF
   fi
 
   # ────────────────────────────────────────────────────────────────────────────
-  step "3/8" "API Keys"
+  step "3/9" "API Keys"
 
   local api_key
   api_key=$(get_env_key "LINEAR_API_KEY")
@@ -569,7 +611,7 @@ PYEOF
     "Get it: GitHub → Settings → Developer settings → Personal access tokens"
 
   # ────────────────────────────────────────────────────────────────────────────
-  step "4/8" "Linear API Validation"
+  step "4/9" "Linear API Validation"
 
   set -a; source .env 2>/dev/null || true; set +a
   api_key=$(get_env_key "LINEAR_API_KEY")
@@ -629,7 +671,7 @@ PYEOF
   fi
 
   # ────────────────────────────────────────────────────────────────────────────
-  step "5/8" "Linear Workflow States"
+  step "5/9" "Linear Workflow States"
 
   if [[ "$linear_ok" == "true" ]]; then
     local states_out
@@ -669,7 +711,7 @@ PYEOF
   fi
 
   # ────────────────────────────────────────────────────────────────────────────
-  step "6/8" "Linear Labels"
+  step "6/9" "Linear Labels"
 
   if [[ "$linear_ok" == "true" ]]; then
     local labels_out
@@ -724,7 +766,7 @@ PYEOF
   fi
 
   # ────────────────────────────────────────────────────────────────────────────
-  step "7/8" "MCP Configuration"
+  step "7/9" "MCP Configuration"
 
   # Note: Claude CLI does NOT expand ${VAR} syntax in MCP env fields.
   # LINEAR_ACCESS_TOKEN is the var that linear-mcp reads (not LINEAR_API_KEY).
@@ -1020,7 +1062,88 @@ PYEOF
   fi
 
   # ────────────────────────────────────────────────────────────────────────────
-  step "8/8" "Live Integration Tests"
+  step "8/9" "Playwright (Visual QA)"
+
+  if ! command -v npx &>/dev/null; then
+    warn "npx not found — cannot set up Playwright (install Node.js first)"
+    ((issues++))
+  else
+    # Ensure playwright MCP entry exists in .mcp.json
+    local has_playwright
+    has_playwright=$("$VENV_DIR/bin/python" -c "
+import json
+try:
+    d = json.load(open('.mcp.json'))
+    servers = d.get('mcpServers', d)
+    print('yes' if 'playwright' in servers else 'no')
+except Exception:
+    print('no')
+" 2>/dev/null || echo "no")
+
+    if [[ "$has_playwright" == "no" ]]; then
+      if [[ -f .mcp.json ]]; then
+        info "Auto-adding playwright MCP server to .mcp.json..."
+        "$VENV_DIR/bin/python" - <<'PYEOF'
+import json
+path = '.mcp.json'
+with open(path) as f:
+    cfg = json.load(f)
+cfg.setdefault('mcpServers', {})['playwright'] = {
+    'command': 'npx',
+    'args': ['-y', '@playwright/mcp@latest', '--headless']
+}
+with open(path, 'w') as f:
+    json.dump(cfg, f, indent=2)
+    f.write('\n')
+PYEOF
+        ok "MCP: playwright server added to .mcp.json"
+        ((fixed_count++))
+      else
+        warn ".mcp.json not found — cannot add playwright MCP entry"
+        ((issues++))
+      fi
+    else
+      ok "MCP: playwright server configured in .mcp.json"
+    fi
+
+    # Check if Chromium browsers are installed; install if missing
+    local chromium_ok
+    chromium_ok=$(npx --yes playwright show-browsers 2>/dev/null | grep -i chromium | head -1 || true)
+    if [[ -z "$chromium_ok" ]]; then
+      # Try a lighter check: can playwright actually launch chromium?
+      chromium_ok=$(node -e "
+const { chromium } = require('playwright');
+chromium.launch({ headless: true })
+  .then(b => { console.log('OK'); b.close(); })
+  .catch(() => console.log('MISSING'));
+" 2>/dev/null || echo "MISSING")
+    fi
+
+    if echo "$chromium_ok" | grep -qi "MISSING\|not found\|browserType.launch\|Executable doesn"; then
+      info "Playwright browsers not installed — installing Chromium..."
+      if npx --yes playwright install chromium --with-deps 2>&1 | tail -3; then
+        ok "Playwright: Chromium installed"
+        ((fixed_count++))
+      else
+        warn "Playwright: Chromium install failed — visual QA will not work"
+        dim "    Fix manually: npx playwright install chromium --with-deps"
+        ((issues++))
+      fi
+    else
+      # Simpler check: just verify the playwright CLI is reachable
+      if npx --yes playwright --version &>/dev/null; then
+        ok "Playwright: available  ($(npx playwright --version 2>/dev/null || echo 'installed'))"
+      else
+        info "Installing Playwright Chromium for Visual QA..."
+        npx --yes playwright install chromium --with-deps &>/dev/null && \
+          ok "Playwright: Chromium installed" && ((fixed_count++)) || \
+          { warn "Playwright install failed — run: npx playwright install chromium --with-deps"; ((issues++)); }
+      fi
+    fi
+  fi
+
+  # ────────────────────────────────────────────────────────────────────────────
+  step "9/9" "Live Integration Tests"
 
   # Test 1: Python Linear client (orchestrator auth path)
   local api_key_live
