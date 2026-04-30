@@ -60,12 +60,14 @@ def build_pep_reader_prompt(issue: dict, config: Config) -> str:
     Core Plan goes to Human Review. PEP is marked Done.
     Signals pep_decomposed with the Core Plan UUID.
     """
+    from datetime import datetime
     issue_id   = issue.get("identifier", issue["id"])
     issue_uuid = issue["id"]
     title      = issue.get("title", "")
     description = (issue.get("description", "") or "").strip()
     team_id    = config.linear_team_id
     project_id = config.linear_project_id or ""
+    started_at = datetime.now(_NY).strftime("%-I:%M %p ET")
 
     return f"""\
 # PEP Reader Agent — {issue_id}: {title}
@@ -243,10 +245,14 @@ After the Core Plan issue is created and the comment is posted, output EXACTLY:
 Replace `<uuid>` and `<identifier>` with the values returned by Linear when you created the issue.
 Do not end this session without emitting this signal.
 
-**Never use Bash/curl to call the Linear API.** Always use `mcp__linear__*` tools.
-If an MCP tool returns an error, retry once. If it still fails, note the failure in your
-final signal summary and continue — do not signal `human_input_needed` for tool failures.
-`human_input_needed` is reserved for genuine decisions that require a human answer.
+## Rules
+- Your very first action: post a comment on `issueId: "{issue_uuid}"` with body:
+  `▶️ PEP Reader Agent started — analysing PEP and creating the Core Plan.  · started {started_at}`
+- Use `TZ=America/New_York date +"%-I:%M %p ET"` in Bash whenever you need the current time
+- **Never use Bash/curl to call the Linear API.** Always use `mcp__linear__*` tools.
+  If an MCP tool returns an error, retry once. If it still fails, note the failure in your
+  final signal summary and continue — do not signal `human_input_needed` for tool failures.
+  `human_input_needed` is reserved for genuine decisions that require a human answer.
 """
 
 
@@ -382,7 +388,7 @@ To get the state ID, call `mcp__linear__linear_search_issues_by_identifier` on
 ## Step 6 — Post summary comment on Core Plan
 
 Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`.
-Before posting, run `date -u +%H:%M` in Bash and compute elapsed minutes since {started_at}.
+Before posting, run `TZ=America/New_York date +"%-I:%M %p ET"` in Bash and compute elapsed minutes since {started_at}.
 
 ```
 📦 [{issue_id}] decomposed — [N] blocks created and queued  · <elapsed> elapsed
