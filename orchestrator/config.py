@@ -8,6 +8,7 @@ Credential loading order:
 WORKFLOW.md contains only policy config — no credentials live there.
 """
 import os
+import re
 import yaml
 from pathlib import Path
 from dataclasses import dataclass
@@ -23,6 +24,11 @@ except ImportError:
 WORKFLOW_PATH = Path("WORKFLOW.md")
 
 
+def _interpolate_env(value: str) -> str:
+    """Expand ${VAR_NAME} placeholders in WORKFLOW.md string values."""
+    return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), value)
+
+
 def load_workflow() -> dict:
     with open(WORKFLOW_PATH) as f:
         return yaml.safe_load(f)
@@ -36,6 +42,7 @@ class Config:
     linear_project_id: Optional[str]
     figma_api_key: Optional[str]
     github_token: Optional[str]
+    connect_ui_path: Optional[str]  # absolute path to the connect-ui repo
 
     # ── State names (env-overridable, set by resonance setup) ────────────────
 
@@ -140,4 +147,5 @@ def load_config() -> Config:
         linear_project_id=linear_project_id,
         figma_api_key=os.environ.get("FIGMA_API_KEY") or None,
         github_token=os.environ.get("GITHUB_TOKEN") or None,
+        connect_ui_path=os.environ.get("CONNECT_UI_PATH") or None,
     )
