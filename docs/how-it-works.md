@@ -130,12 +130,13 @@ All actions (approve, feedback, abort) write to `runs/commands.jsonl` via `orche
 
 Labels are applied in Linear before moving an issue to Plan Approved. They determine task type, which controls the agent's skills, MCP servers, and required artifacts.
 
-Classification priority: `pep` → `plan` → all other types. The first match wins.
+Classification priority: `pep` → `core-plan` → `block` → all other types. The first match wins.
 
 | Label(s) | Task type | Agent | Worker | Key skills | Required artifacts |
 |---|---|---|---|---|---|
 | `pep` | pep | PEP Reader Agent | claude-opus | Linear MCP | (signal: pep_decomposed) |
-| `plan` | plan | Planning Agent | claude-opus | Linear MCP | (signal: plan_decomposed) |
+| `core-plan` | core_plan | Block Decomposer Agent | claude-opus | Linear MCP | (signal: blocks_created) |
+| `block` | block | Block Execution Agent | claude-sonnet | connectui-dev, pd-pep, verify | (signal: block_complete) |
 | `design` | design_to_code | Frontend Engineer | claude-sonnet | connectui-dev, pd-pep, pd-plan-post | preview_url, figma_comparison |
 | `frontend` (no `bug`) | frontend_feature | Frontend Engineer | claude-sonnet | connectui-dev, pd-pep, pd-plan-post | preview_url |
 | `frontend` + `bug` | frontend_bug | Frontend Engineer | claude-sonnet | connectui-dev, pd-pep | preview_url, before_after_evidence |
@@ -152,28 +153,40 @@ Issues with no recognized label combination cause the orchestrator to post a com
 
 ### PEP issues
 
-A PEP (Product Execution Prompt) is the top-level document for a project or feature. It lives in a Linear project named `[PEP] <title>` as a single issue with the `pep` label.
+A PEP (Product Execution Prompt) is the top-level document for a project or feature. It lives as a single issue with the `pep` label, typically inside a Linear project named `[PEP] <title>`.
 
-1. Human writes the PEP (manually or via `/pd-pep` skill) and moves it to Plan Approved.
-2. Orchestrator classifies as `pep` (highest priority, checked before `plan`), posts a "PEP Reader Agent started" comment, sets Linear → In Progress.
-3. PEP Reader Agent (claude-opus) runs in a worktree. It:
-   - Reads the PEP description and all comments on the issue (comments may contain human clarifications added after the initial write)
-   - For each Plan defined in the PEP `## Plans` section, creates a child issue titled `[<PEP-ID>-P<N>] Title` (e.g. `[RND-22-P1] Auth Backend API`) using the Linear MCP tool
-   - Plan issues are created in **Todo** state — human must review and approve each one before execution starts
-   - Writes `runs/memory/<issue-id>/plan.md` with the decomposition summary and sequencing rationale
-   - Posts a `[PM]` self-comment on each Plan issue explaining scope and block order
-   - Posts a summary comment on the PEP issue listing all Plans and sequencing
-4. Agent emits: `AGENT_SIGNAL: {"type": "pep_decomposed", "pep_id": "...", "plans": [{"id": "...", "identifier": "...", "title": "...", "blocked_by_ids": [...]}]}`
-5. Orchestrator: wires Linear blocking relations between Plan issues (from `blocked_by_ids` in the signal), marks PEP issue → Done, persists plan metadata to `runs/memory/<issue-id>/plans.json`.
-6. Human reviews Plan issues. When satisfied, moves each to Plan Approved. Resonance picks them up automatically in dependency order.
+1. Human writes the PEP (manually or via `/create-pep` in a Claude Code session) and moves it to Plan Approved.
+2. Orchestrator classifies as `pep` (highest priority), posts a "PEP Reader Agent started" comment, sets Linear → In Progress.
+3. PEP Reader Agent (claude-opus) runs in a per-issue worktree. It:
+   - Reads the PEP description and all comments on the issue
+   - Creates exactly one **Core Plan** issue (`label: core-plan`, parent: PEP issue, project-scoped, state: Human Review) using the Linear MCP tool
+   - Posts a summary comment on the PEP issue describing the planned blocks and acceptance criteria
+   - Moves the PEP issue → Done
+4. Agent emits: `AGENT_SIGNAL: {"type": "pep_decomposed", "core_issue_id": "...", "core_identifier": "...", "summary": "..."}`
+5. Orchestrator: patches `projectId` and `parentId` on the Core Plan issue as a safety net (in case the agent missed them), then marks PEP → Done.
+6. Core Plan issue lands in Human Review. Human inspects it, edits if needed, then moves to Plan Approved.
 
-### Plan issues
+### Core Plan issues
 
-1. Issue with `plan` label appears in Plan Approved.
-2. Orchestrator classifies as `plan`, builds the planning prompt (`build_planning_prompt()`), sets Linear → In Progress, adds `RES` label, posts a "Planning Agent started" comment.
-3. Planning Agent runs in a worktree. It uses `mcp__linear__linear_create_issue` to create one issue per phase (child of the plan issue), writes `runs/memory/<issue-id>/plan.md`, posts a summary comment listing all phase identifiers, bulk-moves all phase issues to Plan Approved.
-4. Agent emits: `AGENT_SIGNAL: {"type": "plan_decomposed", "plan_id": "...", "phases": [...]}`
-5. Orchestrator: local run → `complete`, plan issue → Done in Linear, phases get picked up automatically on subsequent polls.
+1. Issue with `core-plan` label appears in Plan Approved.
+2. Orchestrator classifies as `core_plan`, builds the block decomposer prompt, sets Linear → In Progress, adds `RES` label.
+3. Block Decomposer Agent (claude-opus) runs in a per-issue worktree. It:
+   - Reads the Core Plan description to understand the full scope
+   - Creates one Block sub-issue per discrete unit of work (`label: block`, each with a checklist-style description of tasks), all as children of the Core Plan issue
+   - Determines sequencing: which blocks must follow others
+4. Agent emits: `AGENT_SIGNAL: {"type": "blocks_created", "core_plan_id": "...", "blocks": [{"id": "...", "identifier": "...", "blocked_by_ids": [...]}]}`
+5. Orchestrator: creates Linear blocking relations from `blocked_by_ids` in the signal (e.g. B2 blocked by B1); sets Core Plan → In Progress. Block issues are created in Plan Approved state and picked up automatically in dependency order.
+
+### Block issues
+
+1. Issue with `block` label appears in Plan Approved (and all its `blocked_by` issues are Done).
+2. Orchestrator classifies as `block`, sets Linear → In Progress, adds `RES` label, and assigns it to the **shared main/ worktree** for the project (see Worker Session Setup).
+3. Block Execution Agent (claude-sonnet) implements the block. It:
+   - Works entirely within `workspaces/{project-slug}/main/` — the shared git worktree for the project
+   - Updates the block's Linear issue description via `mcp__linear__linear_bulk_update_issues` as tasks are checked off
+   - Commits code incrementally so each block's work is on top of the previous block's commits
+4. Agent emits: `AGENT_SIGNAL: {"type": "block_complete", "summary": "..."}`
+5. Orchestrator: moves Block → Done; pushes branch to GitHub if `GITHUB_TOKEN` is set; spawns a Haiku log agent to summarize the run. When all blocks under a Core Plan are Done, Core Plan → Human Review.
 
 ### Execution issues
 
@@ -202,7 +215,7 @@ When the blocker reaches Done on a later poll:
 2. If the issue was in `_blocked_notified`, a `[PM]` comment is posted: "▶️ All dependencies resolved. Starting execution now."
 3. The run proceeds normally.
 
-Blocking relations are set by the orchestrator (not the agent) in `_finish_pep_decomposed()` by calling `linear_client.create_issue_relation()` for each `blocked_by_ids` entry from the `pep_decomposed` signal.
+Blocking relations are set by the orchestrator (not the agent) after receiving the `blocks_created` signal, by calling `linear_client.create_issue_relation()` for each `blocked_by_ids` entry in the signal's `blocks` list.
 
 ### Needs Input blocker flow (mid-task)
 
@@ -221,8 +234,9 @@ This runs on every line regardless of whether the line is valid stream-json. The
 
 | Signal | Fields | Orchestrator action |
 |---|---|---|
-| `pep_decomposed` | `pep_id` (str), `plans` (list of `{id, identifier, title, blocked_by_ids}`) | Linear blocking relations created between plans; PEP issue → Done; plans metadata written to `runs/memory/<id>/plans.json` |
-| `plan_decomposed` | `plan_id` (str), `phases` (list of `{id, identifier, title}`) | Local run → `complete`, issue → Done in Linear, phases written to memory |
+| `pep_decomposed` | `core_issue_id` (str), `core_identifier` (str), `summary` (str) | Core Plan was created by the agent; orchestrator patches `projectId`/`parentId` as safety net; PEP → Done |
+| `blocks_created` | `core_plan_id` (str), `blocks` (list of `{id, identifier, blocked_by_ids}`) | Creates Linear blocking relations from `blocked_by_ids`; Core Plan → In Progress |
+| `block_complete` | `summary` (str) | Block → Done; branch pushed to GitHub if `GITHUB_TOKEN` set; Haiku log agent spawned |
 | `ready_for_review` | `summary` (str), `artifacts` (dict with `preview_url` etc.) | `run_state.update_run(status="waiting_human", artifacts=...)` → on exit: Linear → Human Review, comment posted |
 | `human_input_needed` | `question` (str), `context` (str) | `run_state.update_run(status="needs_input", pending_question=...)` → on exit: Linear → Agent Feedback Needed, comment posted |
 
@@ -256,7 +270,7 @@ running → waiting_human   (ready_for_review signal)
 running → needs_input     (human_input_needed signal)
 running → paused          (pause command)
 running → failed          (max attempts, abort, linear state error)
-running → complete        (pep_decomposed or plan_decomposed signal)
+running → complete        (pep_decomposed, blocks_created, or block_complete signal)
 waiting_human → running   (approve command or Human Review → Agent Feedback Needed detected)
 needs_input → running     (Agent Feedback Needed detected in Linear)
 paused → running          (approve command)
@@ -271,16 +285,13 @@ Linear auto-assigns numeric identifiers (e.g. `RND-22`). Issue hierarchy is comm
 
 | Level | Title format | Example |
 |---|---|---|
-| PEP issue | `[PEP] <title>` *(project name)* | Project: `[PEP] User Authentication` |
-| PEP issue | no prefix needed on the issue itself | Issue title: `User Authentication PEP` |
-| Plan issue | `[<PEP-ID>-P<N>] <title>` | `[RND-22-P1] Auth Backend API` |
-| Block issue | `[<PEP-ID>-P<N>-B<N>] <title>` | `[RND-22-P1-B1] User model + migration` |
+| PEP issue | `[PEP] <title>` | `[PEP] Build resonance-live.html` |
+| Core Plan issue | `[CORE PLAN] <title>` | `[CORE PLAN] Build resonance-live.html` |
+| Block issue | `B<N>: <title>` | `B1: HTML structure + token mapping` |
 
-Where `RND-22` is the Linear identifier of the **PEP issue** (not the project).
+The Core Plan title mirrors the PEP title so the relationship is immediately obvious in the Linear project view. Block titles use the short `B<N>: ` prefix so they sort and read cleanly as an ordered list.
 
-This means any agent or human reading an issue title immediately understands its place in the work tree. Searching Linear for `RND-22` returns the full work tree for that PEP.
-
-Block issues are created by the Execution Agent during a Plan run, not by the PEP Reader Agent. The PEP Reader Agent only creates Plan issues.
+This means any agent or human reading an issue title immediately understands its place in the work tree.
 
 ---
 
@@ -290,9 +301,10 @@ Agents post `[PM]` prefixed comments at key moments. These are distinguishable f
 
 | Moment | Who posts | Content |
 |---|---|---|
-| Plan issue created | PEP Reader Agent | `[PM] Created from PEP RND-22. Plan P1 of 2. Blocks: B1→B2. Rationale: ...` |
-| Plan blocked at pickup | Orchestrator | `[PM] ⏸ Waiting for [RND-30] — will start automatically when it reaches Done.` |
-| Blocked plan unblocked | Orchestrator | `[PM] ▶️ All dependencies resolved. Starting execution now. Previously waiting on: RND-30` |
+| Core Plan issue created | PEP Reader Agent | `[PM] Core Plan created from PEP. Blocks planned: B1→B2→B3. Rationale: ...` |
+| Block issues created | Block Decomposer Agent | `[PM] Blocks created: B1 (B2 blocked by B1, B3 blocked by B2). Starting in dependency order.` |
+| Issue blocked at pickup | Orchestrator | `[PM] ⏸ Waiting for [RND-30] — will start automatically when it reaches Done.` |
+| Blocked issue unblocked | Orchestrator | `[PM] ▶️ All dependencies resolved. Starting execution now. Previously waiting on: RND-30` |
 
 The "blocked" comment is posted only once per orchestrator session (tracked by `_blocked_notified` set on the Poller). Subsequent polls that are still blocked are silent to avoid comment noise.
 
@@ -300,9 +312,35 @@ The "blocked" comment is posted only once per orchestrator session (tracked by `
 
 ## Worker Session Setup
 
-For each new run, `WorkspaceManager.create()` does the following:
+### Block workspace layout (project-scoped)
 
-1. Creates the worktree directory (`workspaces/<team-prefix>/`) then the worktree:
+When a project is scoped (`LINEAR_PROJECT_ID` is set), block issues all share a single git worktree so each block builds on the previous block's commits:
+
+```
+workspaces/{project-slug}/
+├── main/                        ← shared git worktree, branch: agent/{project-slug}
+│   ├── .gitignore               ← committed by orchestrator (excludes .claude/)
+│   ├── .claude/settings.json   ← ISSUE_ID + ISSUE_PATH + MAIN_PATH env vars
+│   └── [output codebase]
+└── issues/
+    ├── {id}/                    ← per-block scratch dir (plain directory, not worktree)
+    └── ...
+```
+
+The `main/` worktree is created once for the project on the first block. Each new block updates `ISSUE_ID`, `ISSUE_PATH`, and `MAIN_PATH` in the existing `.claude/settings.json` rather than creating a new worktree. This ensures block N+1 starts from the committed state of block N.
+
+### Legacy per-issue worktree (non-block issues)
+
+Non-block issues (pep, core_plan, design, frontend, backend, execution) each get their own worktree:
+
+- **With project scoped**: `workspaces/{project-slug}/issues/{issue-id}/` on branch `agent/{issue-id}`
+- **Without project**: `workspaces/{team-prefix}/{issue-id}/` on branch `agent/{issue-id}`
+
+### Worktree creation steps
+
+For each new per-issue worktree, `WorkspaceManager.create()` does the following:
+
+1. Creates the worktree directory then the worktree:
    ```bash
    git worktree add -b agent/<issue-id> workspaces/<team-prefix>/<issue-id> HEAD
    ```
@@ -311,7 +349,7 @@ For each new run, `WorkspaceManager.create()` does the following:
    git worktree add workspaces/<team-prefix>/<issue-id> agent/<issue-id>
    ```
 
-2. Writes `workspaces/<team-prefix>/<issue-id>/.claude/settings.json` with **absolute** paths — so depth never matters:
+2. Writes `.claude/settings.json` with **absolute** paths — so depth never matters:
    ```json
    {
      "pluginDirs": [
@@ -325,12 +363,14 @@ For each new run, `WorkspaceManager.create()` does the following:
                  "WebFetch(*)", "TodoWrite(*)"]
      },
      "env": {
-       "ISSUE_ID": "<issue-id>"
+       "ISSUE_ID": "<issue-id>",
+       "ISSUE_PATH": "<abs-path-to-issue-scratch-dir>",
+       "MAIN_PATH": "<abs-path-to-main-worktree>"
      }
    }
    ```
 
-3. Creates `workspaces/<team-prefix>/<issue-id>/.claude/memory` as an absolute symlink → `<repo-root>/.claude/memory`. This gives the worker read/write access to the shared project memory. Specifically, `.claude/memory/standards/connectui-design-system.md` and `.claude/memory/standards/connectui-stack.md` become readable as `/.claude/memory/standards/...` inside the worker session.
+3. Creates `.claude/memory` as an absolute symlink → `<repo-root>/.claude/memory`. This gives the worker read/write access to the shared project memory. Specifically, `.claude/memory/standards/connectui-design-system.md` and `.claude/memory/standards/connectui-stack.md` become readable as `/.claude/memory/standards/...` inside the worker session.
 
 4. The `claude` command adds `--permission-mode bypassPermissions`, so the agent operates without interactive permission prompts.
 
@@ -470,6 +510,8 @@ Last 60 events from `runs/events.jsonl`, excluding system startup/shutdown event
 | `c` | Cleanup | Clears failed/complete/archived runs and event log (with confirmation) |
 | `d` | Demo | Creates a plan issue in Linear for end-to-end walkthrough |
 | `e` | Event browser | Full scrollable event history (last 300 events) |
+| `s` | Debug tracing settings | Opens Settings modal: enable/disable tracing, per-category switches (mcp, linear, agent, pipeline) |
+| `t` | Debug trace viewer | Browse latest `runs/traces/session-*.jsonl` file; Enter for event detail |
 | `?` | Help | Full help screen with workflow explanation |
 
 ### Run detail modal
@@ -479,6 +521,28 @@ Opened with `Enter`. Shows: issue ID, status, task type, iteration, Linear URL, 
 cd workspaces/<team-prefix>/<issue-id> && claude
 /pd-issue <issue-id>
 ```
+
+---
+
+## Debug Tracing
+
+When enabled, writes full structured trace events to `runs/traces/session-{timestamp}.jsonl`.
+
+Captured categories:
+- **mcp**: full tool input + output for every `mcp__*` call agents make
+- **linear**: every Linear GraphQL call from the orchestrator (method, variables, response summary, elapsed ms)
+- **agent**: complete (untruncated) agent thinking text + final result
+- **pipeline**: orchestrator routing decisions, dependency checks, state transitions
+
+To enable: press `s` in the TUI → toggle "Enable debug tracing" → Enter.
+To view: press `t` in the TUI, or:
+```bash
+cat runs/traces/session-*.jsonl | jq .
+```
+
+Settings are persisted to `runs/debug-settings.json`.
+
+Trace files in `runs/traces/` are not cleared by the `c` (cleanup) action in the TUI. Remove them manually if disk space is a concern.
 
 ---
 

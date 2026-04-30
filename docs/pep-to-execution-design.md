@@ -1,5 +1,12 @@
 # PEP to Execution — Design Document
 
+> **⚠ Superseded.** This document describes an earlier design. The current implementation is documented in:
+> - `docs/how-it-works.md` — full technical reference
+> - `docs/operator-runbook.md` — day-to-day operation
+> - `docs/pipeline-status.md` — current component status and what was built per session
+>
+> Key terminology differences from this doc: what this doc calls "Plan issues" the current system calls "Block issues"; the intermediate "Core Plan" layer did not exist in this design.
+
 How a Product Execution Prompt becomes running work in Resonance.
 
 ---

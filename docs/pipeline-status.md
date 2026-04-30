@@ -1,6 +1,6 @@
 # Resonance Pipeline — Current State & Roadmap
 
-*Last updated: 2026-04-30 (session 3)*
+*Last updated: 2026-04-30 (session 4)*
 
 ---
 
@@ -43,6 +43,12 @@ Human Review → Done
 | GitHub branch links in Linear comments | ✅ Working | Block Done + final "all blocks complete" comments include branch URLs |
 | Haiku log agent (`RUNLOG.md`) | ✅ Working | Lightweight Haiku subprocess writes handoff log per block/plan run |
 | Project-grouped workspaces | ✅ Working | `workspaces/{project-slug}/issues/{issue-id}` when project is scoped |
+| Shared main/ workspace for blocks | ✅ Working | All block agents work in `workspaces/{project-slug}/main/`; per-block data in `issues/{id}/` |
+| Worktree `.gitignore` on create | ✅ Working | Orchestrator commits `.gitignore` (excludes `.claude/`) to each new worktree branch |
+| README.md on first push | ✅ Working | First block to push writes `README.md` with project name, branch link, and block summary |
+| Debug tracing system | ✅ Working | `orchestrator/tracer.py` captures MCP calls, Linear API, agent reasoning, pipeline decisions → `runs/traces/` |
+| TUI settings modal (`s`) | ✅ Working | Toggle debug tracing on/off per category; persisted to `runs/debug-settings.json` |
+| TUI trace viewer (`t`) | ✅ Working | Browse latest session trace; Enter for full event detail |
 
 ### What was built across sessions
 
@@ -68,6 +74,18 @@ Human Review → Done
 | Haiku log agent | `_spawn_log_agent()` spawns `claude-haiku` after each block/plan run; writes `RUNLOG.md` |
 | Project-grouped workspaces | `WorkspaceManager` now groups worktrees as `workspaces/{project-slug}/issues/{id}` |
 | Shared main/ workspace for blocks | All block agents now work in a single `main/` worktree (`$MAIN_PATH`); `issues/` folders hold per-block metadata (`$ISSUE_PATH`) |
+
+**Session 4 — Debug tracing + documentation**
+
+| Feature | What changed |
+|---|---|
+| Debug tracing system | `orchestrator/tracer.py` — captures MCP calls (input+output pairs), Linear API calls (query/response/ms), full agent reasoning, pipeline decisions → `runs/traces/session-*.jsonl` |
+| TUI settings modal (`s`) | `_SettingsModal` in `tui/app.py` — toggle tracing on/off, per-category switches, persisted to `runs/debug-settings.json` |
+| TUI trace viewer (`t`) | `_TraceViewerScreen` — browse latest trace newest-first; Enter for full event detail via `_EventDetailScreen` |
+| Header trace indicator | `● trace` in magenta shown in TUI header bar when tracing is active |
+| Worktree `.gitignore` | `_write_worktree_gitignore()` in `workspace.py` — commits `.gitignore` (excludes `.claude/`, `.env`, logs) to each new branch |
+| README.md on push | `_ensure_worktree_readme()` in `poller.py` — first block to push writes `README.md` with project name, Linear link, block summary |
+| Documentation rewrite | `README.md`, `docs/how-it-works.md`, `docs/operator-runbook.md` updated to reflect PEP→Core Plan→Blocks flow, new workspace layout, debug tracing, complete TUI shortcuts |
 
 ### Verified working (live tests)
 

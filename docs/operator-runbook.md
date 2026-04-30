@@ -72,7 +72,7 @@ Todo  |  Plan Approved  |  In Progress  |  Agent Feedback Needed  |  Human Revie
 
 ## How the orchestrator detects issues
 
-The orchestrator runs a poll loop on a 60-second interval (configurable in `WORKFLOW.md` under `polling.interval_seconds`).
+The orchestrator runs a poll loop on a 15-second interval (configurable in `WORKFLOW.md` under `polling.interval_seconds`).
 
 Each tick:
 1. Queries the Linear team for issues whose workflow state is exactly "Plan Approved".
@@ -87,13 +87,18 @@ Every 120 seconds (configurable under `polling.reconcile_interval_seconds`), the
 
 ## How agents know what to do
 
-**Label-to-task-type mapping** (from `WORKFLOW.md`):
+**Label-to-task-type mapping** (from `WORKFLOW.md`). Classification priority: `pep` → `core-plan` → `block` → all other types.
 
-| Label(s) on the issue | Task type | Notes |
-|---|---|---|
-| `frontend` (no `bug`) | frontend_feature | New UI feature |
-| `frontend` + `bug` | frontend_bug | UI regression fix |
-| `design` | design_to_code | Figma → component; requires FIGMA_API_KEY |
+| Label(s) on the issue | Task type | Agent | Notes |
+|---|---|---|---|
+| `pep` | pep | PEP Reader Agent (claude-opus) | Reads PEP, creates Core Plan issue |
+| `core-plan` | core_plan | Block Decomposer Agent (claude-opus) | Creates Block sub-issues with dependencies |
+| `block` | block | Block Execution Agent (claude-sonnet) | Implements work in shared worktree |
+| `frontend` (no `bug`) | frontend_feature | Frontend Engineer | New UI feature |
+| `frontend` + `bug` | frontend_bug | Frontend Engineer | UI regression fix |
+| `design` | design_to_code | Frontend Engineer | Figma → component; requires FIGMA_API_KEY |
+| `backend` (no `bug`) | backend_feature | Backend Engineer | New API/service |
+| `backend` + `bug` | backend_bug | Backend Engineer | Backend regression fix |
 
 Issues with no recognized label combination are rejected without starting: Resonance posts a comment explaining supported labels and returns the issue to Todo.
 
@@ -126,34 +131,128 @@ If the agent exits without emitting a signal, the orchestrator treats it as a fa
 
 ---
 
-## Daily workflow
+## The full flow
 
-### Creating and running an issue
+Resonance follows a three-tier flow: PEP → Core Plan → Blocks. Every project starts with a PEP; direct block-level execution (for ad-hoc tasks) is also supported.
 
-1. **Create the issue** in your Linear team. Write a clear title. Put the full task specification in the description — the agent receives this verbatim.
+### Starting a project with a PEP (recommended)
 
-2. **Apply a label.** Add `frontend`, `frontend` + `bug`, or `design`. Do this before moving to Plan Approved.
+**Step 1 — Write a PEP** (Human Gate 1)
 
-3. **Move to Plan Approved.** This is your explicit authorization. The orchestrator will not touch issues in any other state.
+Create an issue in your Linear project:
+- Title: `[PEP] Your feature name`
+- Label: `pep`
+- Description: product brief — Goal, Acceptance Criteria, and a rough block breakdown (see `docs/pep-template.md` or run `/create-pep` in Claude Code)
 
-4. **Start the orchestrator** if it is not already running:
-   ```bash
-   ./onair.sh
-   ```
-   `./onair.sh` runs pre-flight checks (`.env` exists, `resonance` installed, `claude` on PATH, `resonance doctor` passes) before starting the orchestrator. If any check fails, it prints what to fix and exits without starting.
+Move it to **Plan Approved** when ready.
 
-5. **Wait up to 60 seconds.** The orchestrator picks up the issue on its next poll, sets the Linear state to In Progress, and starts the Claude process.
+**Step 2 — PEP Reader runs (3–7 min)**
 
-6. **Monitor:**
-   ```bash
-   resonance status              # all runs: status, task type, attempt, last event time
-   resonance status RND-123      # single run: all fields including log file path
-   resonance logs RND-123        # recent events from events.jsonl filtered to this issue
-   ```
+Resonance picks up the PEP within 15 seconds, launches the PEP Reader Agent. Watch the TUI event stream for `agent_action` events as it works.
 
-7. **Respond to agent signals** (see Human control reference below).
+Result: one **Core Plan** issue appears in **Human Review** with a full block breakdown and acceptance criteria. The PEP moves to Done.
 
-8. **Review and merge** when the issue reaches Human Review.
+**Step 3 — Review the Core Plan** (Human Gate 2)
+
+Open the Core Plan issue in Linear. Read the planned blocks — edit titles, descriptions, or criteria if needed. When satisfied, move to **Plan Approved**.
+
+**Step 4 — Block Decomposer runs (5–12 min)**
+
+Resonance creates one Block sub-issue per block with Linear blocking relations (B2 blocked by B1, etc.).
+
+**Step 5 — Blocks execute automatically (10–30 min each)**
+
+Blocks run in dependency order. Each block agent:
+- Works in the **shared worktree** `workspaces/{project-slug}/main/` — all blocks build on the same codebase
+- Updates Linear checklist items live as tasks complete
+- Posts "✅ Block complete" comment with branch link when done
+- Pushes the branch to GitHub (if `GITHUB_TOKEN` is set)
+
+You watch progress in the TUI.
+
+**Step 6 — Review the output** (Human Gate 3)
+
+When all blocks are Done, the Core Plan moves to **Human Review**:
+
+```bash
+resonance attach RND-51     # get worktree path and log file
+# open workspaces/{project-slug}/main/ — or review on GitHub
+```
+
+Move the Core Plan to **Done** when satisfied. Resonance cleans up the workspace on its next reconcile.
+
+---
+
+### Running a standalone block (ad-hoc)
+
+For single tasks that don't need a PEP/Core Plan:
+
+1. Create a Linear issue with a task label (`frontend`, `backend`, `design`, or with `bug`).
+2. Move to **Plan Approved**.
+3. Resonance picks it up and runs a Block Execution Agent directly.
+
+---
+
+## Monitoring
+
+### Quick status
+
+```bash
+resonance status              # all runs: status, task type, attempt, last event time
+resonance status RND-123      # single run: all fields including log file path
+resonance logs RND-123        # recent events from events.jsonl filtered to this issue
+```
+
+Status values: `running`, `waiting_human`, `paused`, `complete`, `failed`, `archived`.
+
+### Attach
+
+```bash
+resonance attach RND-123
+```
+
+Prints the worktree path and log file path for a run. Use this to navigate to the worktree or tail the log file manually:
+
+```bash
+cd workspaces/D2D-Demo-gorgon/main
+tail -f runs/logs/RND-123-20260428T143200.log
+```
+
+### Event stream
+
+The orchestrator appends all lifecycle events to `runs/events.jsonl`. This file is the source of truth for what happened and when.
+
+```bash
+tail -f runs/events.jsonl
+```
+
+Each line is a JSON object with at minimum `ts` (ISO timestamp), `issue` (issue ID or "system"), and `type` (event type). `resonance logs RND-123` reads this file and filters by issue ID.
+
+### Debug tracing
+
+For deep investigation, enable full e2e tracing from the TUI:
+
+- Press `s` → toggle **Enable debug tracing** → Enter to save
+- Press `t` to open the trace viewer (newest-first, Enter for full event detail)
+
+Or query the trace file directly:
+```bash
+cat runs/traces/session-*.jsonl | jq 'select(.cat=="mcp")'    # MCP tool calls
+cat runs/traces/session-*.jsonl | jq 'select(.cat=="linear")' # Linear API calls
+cat runs/traces/session-*.jsonl | jq 'select(.cat=="pipeline")' # routing decisions
+```
+
+Trace categories: **mcp** (full tool inputs/outputs from agents), **linear** (API calls + response + timing), **agent** (full reasoning text), **pipeline** (task routing, dependency checks, state transitions).
+
+Settings are persisted to `runs/debug-settings.json`. Trace files are written to `runs/traces/` and are **not** cleared by the TUI cleanup action.
+
+### Run state file
+
+```bash
+cat runs/state.json
+```
+
+JSON object keyed by issue ID. Each entry holds the current run state: status, PID, worktree, log file, iteration, attempt, artifacts, feedback history, pending question. This file is the authoritative source for the orchestrator — `resonance status` reads from it.
 
 ---
 
@@ -264,58 +363,41 @@ resonance approve RND-123
 
 ---
 
-## Monitoring
-
-### Quick status
-
-```bash
-resonance status
-```
-
-Shows all runs on record. Columns: issue ID, status, task type, attempt number, time of last event.
-
-Status values: `running`, `waiting_human`, `paused`, `complete`, `failed`, `archived`.
-
-```bash
-resonance status RND-123
-```
-
-Shows all fields for one run: status, task type, worker, branch, iteration, attempt, started_at, last event, log file path. If there is a pending agent question, it is shown here.
-
-### Attach
-
-```bash
-resonance attach RND-123
-```
-
-Prints the worktree path and log file path for a run. Use this to navigate to the worktree or tail the log file manually:
-
-```bash
-cd workspaces/RND/RND-123
-tail -f runs/logs/RND-123-20260428T143200.log
-```
-
-### Event stream
-
-The orchestrator appends all lifecycle events to `runs/events.jsonl`. This file is the source of truth for what happened and when.
-
-```bash
-tail -f runs/events.jsonl
-```
-
-Each line is a JSON object with at minimum `ts` (ISO timestamp), `issue` (issue ID or "system"), and `type` (event type). `resonance logs RND-123` reads this file and filters by issue ID.
-
-### Run state file
-
-```bash
-cat runs/state.json
-```
-
-JSON object keyed by issue ID. Each entry holds the current run state: status, PID, worktree, log file, iteration, attempt, artifacts, feedback history, pending question. This file is the authoritative source for the orchestrator — `resonance status` reads from it.
-
----
-
 ## Troubleshooting
+
+### PEP not picked up
+
+**Symptom:** PEP issue is in Plan Approved but Resonance ignores it.
+
+**Checks:**
+1. The issue must have the label `pep` (case-sensitive). Verify in Linear.
+2. `LINEAR_TEAM_ID` matches the team. Run `resonance doctor`.
+3. `LINEAR_PROJECT_ID` is set to the correct project. Run `./onair.sh --project <url>` to scope correctly.
+
+### Blocks running in wrong order
+
+**Symptom:** B2 or B3 ran before its predecessor was Done.
+
+**Cause:** The Block Decomposer Agent did not emit `blocked_by_ids` in its `blocks_created` signal, so the orchestrator never created Linear blocking relations.
+
+**Check:**
+```bash
+cat runs/traces/session-*.jsonl | jq 'select(.type=="agent_signal") | .signal'
+```
+Look for the `blocks_created` signal. If `blocked_by_ids` is empty for every block, the Block Decomposer prompt needs attention.
+
+**Fix:** Re-run the Core Plan (move back to Plan Approved). Enable debug tracing first (`s` in TUI) to capture the full signal.
+
+### Checkboxes not updating in Linear
+
+**Symptom:** Block agent runs successfully but the Linear issue description checkboxes stay unchecked.
+
+**Cause:** The `linear-mcp` schema is missing the `description` field in `linear_bulk_update_issues`. The wizard auto-patches this.
+
+**Fix:**
+```bash
+./wizard.sh check   # re-applies the description field patch to tool.types.js
+```
 
 ### Issue not picked up
 
@@ -323,7 +405,7 @@ JSON object keyed by issue ID. Each entry holds the current run state: status, P
 
 **Checks:**
 1. State name is case-sensitive. Confirm the issue is in the state named exactly "Plan Approved" — not a label, not a comment.
-2. Issue has a recognized label (`frontend`, `frontend`+`bug`, or `design`).
+2. Issue has a recognized label (`pep`, `core-plan`, `block`, `frontend`, `frontend`+`bug`, `design`, `backend`, or `backend`+`bug`).
 3. `LINEAR_TEAM_ID` matches the team the issue belongs to. Run `resonance doctor` to verify.
 4. Orchestrator is running. Check `./onair.sh` output or `resonance status`.
 5. Concurrency limit: if 2 runs are already active, new issues are queued until a slot opens.
