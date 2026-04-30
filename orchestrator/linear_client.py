@@ -293,13 +293,19 @@ class LinearClient:
         issue_id: str,
         description: Optional[str] = None,
         title: Optional[str] = None,
+        project_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
     ) -> None:
-        """Update issue fields (description, title)."""
+        """Update issue fields."""
         input_fields: dict = {}
         if description is not None:
             input_fields["description"] = description
         if title is not None:
             input_fields["title"] = title
+        if project_id is not None:
+            input_fields["projectId"] = project_id
+        if parent_id is not None:
+            input_fields["parentId"] = parent_id
         if not input_fields:
             return
         self._query(

@@ -599,7 +599,7 @@ class Poller:
         run_state.update_run(issue_id, status="complete")
         issue_memory.update_context(issue_id, status="complete", core_issue=core_identifier)
 
-        # Move Core Plan → Human Review
+        # Move Core Plan → Human Review; also fix project/parent if agent couldn't set them
         if core_uuid:
             try:
                 core_issue = self._linear.get_issue(core_uuid)
@@ -608,6 +608,17 @@ class Poller:
                         core_uuid, core_issue["team"]["id"], self._config.state_review
                     )
                     logger.info("core plan moved to Human Review core=%s", core_identifier)
+
+                    # Ensure project + parent are set (agent may have omitted them if
+                    # MCP schema didn't expose projectId/parentId)
+                    patch: dict = {}
+                    if self._config.linear_project_id and not core_issue.get("project"):
+                        patch["project_id"] = self._config.linear_project_id
+                    if issue and not core_issue.get("parent"):
+                        patch["parent_id"] = issue["id"]
+                    if patch:
+                        self._linear.update_issue(core_uuid, **patch)
+                        logger.info("core plan patched project/parent core=%s patch=%s", core_identifier, list(patch))
             except Exception:
                 logger.warning("could not move core plan to Human Review core=%s", core_identifier)
 

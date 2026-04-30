@@ -360,8 +360,16 @@ For each block that depends on another block, call `mcp__linear__linear_create_i
 ## Step 5 — Move all blocks to Plan Approved
 
 Call `mcp__linear__linear_bulk_update_issues` with:
-- `ids`: list of all block UUIDs
-- `stateId`: state ID for `{eligibility}`
+- `issueIds`: list of all block UUIDs
+- `update`: object with `stateId` — the ID of the `{eligibility}` state
+
+Example:
+```json
+{{
+  "issueIds": ["uuid-1", "uuid-2"],
+  "update": {{ "stateId": "<state-uuid>" }}
+}}
+```
 
 To get the state ID, call `mcp__linear__linear_search_issues_by_identifier` on
 `{issue_id}` and read the `team.states` — find the state named `{eligibility}`.
@@ -621,8 +629,16 @@ Review the phase issues in Linear before they execute.
 
 **Step 6 — Move each phase issue to Plan Approved.**
 For each phase issue UUID from Step 3, call `mcp__linear__linear_bulk_update_issues` with:
-- `ids`: list of all phase issue UUIDs
-- `stateId`: the state ID for `{eligibility}`
+- `issueIds`: list of all phase issue UUIDs
+- `update`: object with `stateId` — the ID of the `{eligibility}` state
+
+Example:
+```json
+{{
+  "issueIds": ["uuid-1", "uuid-2"],
+  "update": {{ "stateId": "<state-uuid>" }}
+}}
+```
 
 To get the state ID for `{eligibility}`, first call `mcp__linear__linear_search_issues_by_identifier`
 on the parent issue `{issue_id}` and read the `team.states` from the result.

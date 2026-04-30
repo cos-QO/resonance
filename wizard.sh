@@ -273,6 +273,27 @@ JSEOF
   fi
   echo ""
 
+  # ── Test 3b: linear_create_issue schema has required fields ─────────────────
+  if [[ -n "$auth_js" ]]; then
+    local types_js
+    types_js="$(dirname "$auth_js")/core/types/tool.types.js"
+    if [[ -f "$types_js" ]]; then
+      local missing_fields=()
+      for field in projectId parentId stateId labelIds; do
+        grep -q "$field" "$types_js" 2>/dev/null || missing_fields+=("$field")
+      done
+      if [[ ${#missing_fields[@]} -eq 0 ]]; then
+        ok "linear_create_issue schema  (projectId, parentId, stateId, labelIds present)"
+      else
+        fail "linear_create_issue schema missing fields: ${missing_fields[*]}"
+        dim "    Agents won't be able to set project/parent/state/labels on created issues."
+        dim "    Run: ./wizard.sh check  to auto-apply the schema patch."
+        ((issues++))
+      fi
+    fi
+  fi
+  echo ""
+
   # ── Test 4: MCP config files ──────────────────────────────────────────────────
   echo -e "${BOLD}[4/4]${RESET}  MCP config files"
   local config_issues=0
@@ -884,6 +905,62 @@ PYEOF
       ((fixed_count++))
     else
       ok "linear-mcp auth.js  (Bearer prefix fix already applied)"
+    fi
+
+    # Fix tool.types.js — add projectId/parentId/stateId/labelIds to linear_create_issue schema
+    local types_js
+    types_js="$(dirname "$auth_js")/core/types/tool.types.js"
+    if [[ -f "$types_js" ]]; then
+      local missing_schema_fields=()
+      for field in projectId parentId stateId labelIds; do
+        grep -q "\"$field\"" "$types_js" 2>/dev/null || missing_schema_fields+=("$field")
+      done
+      if [[ ${#missing_schema_fields[@]} -gt 0 ]]; then
+        info "Patching linear-mcp tool.types.js: adding ${missing_schema_fields[*]} to linear_create_issue schema..."
+        "$VENV_DIR/bin/python" - "$types_js" <<'PYEOF'
+import sys, re
+
+path = sys.argv[1]
+content = open(path).read()
+
+insert_before = '            },\n            required: ["title", "description", "teamId"],'
+
+new_fields = '''                projectId: {
+                    type: "string",
+                    description: "Project ID to assign the issue to",
+                    optional: true,
+                },
+                parentId: {
+                    type: "string",
+                    description: "Parent issue ID (UUID) to nest this issue under",
+                    optional: true,
+                },
+                stateId: {
+                    type: "string",
+                    description: "Workflow state ID to set on creation",
+                    optional: true,
+                },
+                labelIds: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "List of label IDs to attach to the issue",
+                    optional: true,
+                },
+'''
+
+# Only patch if fields not already present
+if 'projectId:' not in content:
+    content = content.replace(insert_before, new_fields + insert_before, 1)
+    open(path, 'w').write(content)
+    print('patched')
+else:
+    print('already patched')
+PYEOF
+        ok "linear-mcp tool.types.js patched (create_issue now accepts projectId/parentId/stateId/labelIds)"
+        ((fixed_count++))
+      else
+        ok "linear-mcp tool.types.js  (create_issue schema complete)"
+      fi
     fi
   else
     warn "linear-mcp not found — cannot verify auth.js patch (install with: npm install -g linear-mcp)"
