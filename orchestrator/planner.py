@@ -25,8 +25,9 @@ Planning Agent (label: plan — legacy)
   Signal: plan_decomposed
 """
 import logging
+import re
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 from .config import Config
@@ -439,10 +440,133 @@ final signal summary and continue — do not signal `human_input_needed` for too
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Existing Code Context (frontend tasks)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MAX_CONTEXT_BYTES = 60_000   # cap total injected content
+_MAX_FILE_BYTES    = 8_000    # cap per file
+
+_SKIP_WORDS = {
+    "the", "and", "for", "with", "this", "that", "from", "into", "when",
+    "should", "will", "have", "been", "then", "also", "each", "make", "sure",
+    "component", "components", "file", "files", "code", "base", "codebase",
+    "style", "styles", "feature", "features", "using", "before", "after",
+    "task", "block", "issue", "section", "check", "update", "implement",
+    "function", "variable", "import", "export", "return", "class",
+}
+
+
+def _candidate_keywords(title: str, description: str) -> List[str]:
+    """Extract PascalCase component names and meaningful lowercase domain words."""
+    text = f"{title} {description}"
+    pascal = re.findall(r'\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b', text)
+    words  = [w for w in re.findall(r'\b[a-z][a-z0-9-]{4,}\b', text.lower())
+              if w not in _SKIP_WORDS]
+    # Deduplicate, preserve order
+    seen: set = set()
+    out: List[str] = []
+    for w in pascal + words:
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+    return out
+
+
+def _score_file(path: Path, keywords: List[str]) -> int:
+    """Return match score for a file path against keywords."""
+    name = path.stem.lower()
+    score = 0
+    for kw in keywords:
+        if kw.lower() in name:
+            score += 2 if path.stem == kw else 1
+    return score
+
+
+def build_existing_code_context(
+    title: str,
+    description: str,
+    connect_ui_path: str,
+) -> str:
+    """Scan connect-ui for files relevant to this block and return a markdown section.
+
+    Searches src/features/, src/components/, src/routes/, src/hooks/ for files
+    whose names match keywords extracted from the block title and description.
+    Caps total output at _MAX_CONTEXT_BYTES to stay within prompt budget.
+    Returns empty string if nothing relevant is found.
+    """
+    base = Path(connect_ui_path)
+    if not base.is_dir():
+        return ""
+
+    keywords = _candidate_keywords(title, description)
+    if not keywords:
+        return ""
+
+    search_dirs = [
+        base / "src" / "features",
+        base / "src" / "components",
+        base / "src" / "routes",
+        base / "src" / "hooks",
+    ]
+
+    candidates: List[tuple] = []   # (score, path)
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        for f in d.rglob("*.tsx"):
+            if "__tests__" in f.parts or ".test." in f.name or ".spec." in f.name:
+                continue
+            s = _score_file(f, keywords)
+            if s > 0:
+                candidates.append((s, f))
+        for f in d.rglob("*.ts"):
+            if (f.name.endswith(".d.ts") or f.name.endswith(".gen.ts")
+                    or "__tests__" in f.parts or ".test." in f.name):
+                continue
+            s = _score_file(f, keywords)
+            if s > 0:
+                candidates.append((s, f))
+
+    if not candidates:
+        return ""
+
+    # Sort by score descending, then by path for determinism
+    candidates.sort(key=lambda x: (-x[0], str(x[1])))
+
+    sections: List[str] = []
+    total_bytes = 0
+    for score, f in candidates:
+        if total_bytes >= _MAX_CONTEXT_BYTES:
+            break
+        try:
+            raw = f.read_bytes()[:_MAX_FILE_BYTES].decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f.relative_to(base)
+        sections.append(f"### `{rel}`\n\n```tsx\n{raw}\n```")
+        total_bytes += len(raw)
+
+    if not sections:
+        return ""
+
+    return (
+        "\n---\n\n## Existing Code Context\n\n"
+        "The following files from the connect-ui codebase are relevant to this block.\n"
+        "Read them before implementing — reuse patterns and components you find here.\n\n"
+        + "\n\n".join(sections)
+        + "\n"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Block Execution Agent
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_block_execution_prompt(issue: dict, task_cfg: dict) -> str:
+def build_block_execution_prompt(
+    issue: dict,
+    task_cfg: dict,
+    connect_ui_path: Optional[str] = None,
+) -> str:
     from datetime import datetime
     issue_id    = issue.get("identifier", issue["id"])
     issue_uuid  = issue["id"]
@@ -450,7 +574,11 @@ def build_block_execution_prompt(issue: dict, task_cfg: dict) -> str:
     description = (issue.get("description", "") or "").strip()
     started_at  = datetime.now(_NY).strftime("%-I:%M %p ET")
 
-    return f"""\
+    existing_ctx = ""
+    if connect_ui_path:
+        existing_ctx = build_existing_code_context(title, description, connect_ui_path)
+
+    prompt = f"""\
 # Block Execution Agent — {issue_id}: {title}
 
 You are a Resonance execution agent. Implement this block completely as part of the
@@ -575,6 +703,7 @@ You cannot write to Figma; it is read-only reference material.
   If an MCP tool returns an error, retry once. If it still fails, note it in your signal summary
   and continue — do not signal `human_input_needed` for tool failures (that is for genuine decisions only).
 """
+    return prompt + existing_ctx
 
 
 # ─────────────────────────────────────────────────────────────────────────────

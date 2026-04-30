@@ -276,7 +276,7 @@ class Poller:
         elif task_type == "core_plan":
             prompt = build_core_plan_prompt(issue, self._config)
         elif task_type == "block":
-            prompt = build_block_execution_prompt(issue, task_cfg)
+            prompt = build_block_execution_prompt(issue, task_cfg, connect_ui_path=target_repo_path)
         elif task_type == "plan":
             prompt = build_planning_prompt(issue, self._config)
         else:
@@ -557,12 +557,13 @@ class Poller:
         issue_memory.update_context(issue_id, status="running", iteration=next_iter)
 
         # Route prompt by task type
+        retry_target_repo = current.get("target_repo_path")
         if task_type == "pep":
             prompt = build_pep_reader_prompt(issue_data, self._config)
         elif task_type == "core_plan":
             prompt = build_core_plan_prompt(issue_data, self._config)
         elif task_type == "block":
-            prompt = build_block_execution_prompt(issue_data, task_cfg)
+            prompt = build_block_execution_prompt(issue_data, task_cfg, connect_ui_path=retry_target_repo)
         elif task_type == "plan":
             prompt = build_planning_prompt(issue_data, self._config)
         else:
