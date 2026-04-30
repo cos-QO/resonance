@@ -63,6 +63,8 @@ class Poller:
         self._workspace = WorkspaceManager(config, project_slug=project_slug)
         # issue_id → active Runner
         self._runners: dict[str, Runner] = {}
+        # issue_id → list of sidecar subprocesses (proxy, dev server)
+        self._sidecars: dict[str, list[subprocess.Popen]] = {}
         # issue identifiers we've already posted a "blocked" [PM] comment on
         # (reset on orchestrator restart — duplicate comments on restart are acceptable)
         self._blocked_notified: set[str] = set()
@@ -333,6 +335,10 @@ class Poller:
             except Exception:
                 logger.warning("failed to post start comment issue=%s task_type=%s", issue_id, task_type)
 
+        # Start proxy sidecar for frontend/design tasks that have a target repo
+        if target_repo_path and task_type in {"frontend_feature", "frontend_bug", "design_to_code"}:
+            self._start_proxy_sidecar(issue_id, target_repo_path)
+
         # Launch
         runner = Runner(self._config, issue_id, worktree, prompt, log_file)
         runner.start(iteration=1)
@@ -346,6 +352,9 @@ class Poller:
 
     def _handle_result(self, result: RunResult) -> None:
         issue_id = result.issue_id
+        # Stop any proxy sidecar running for this issue
+        self._stop_proxy_sidecar(issue_id)
+
         current_state = run_state.get_run(issue_id)
         if not current_state:
             return
@@ -1207,9 +1216,55 @@ Keep it under 50 lines. Write only the file — no other output."""
                     except Exception:
                         logger.warning("workspace cleanup failed issue=%s", issue_id)
 
+    # ── Proxy sidecar ─────────────────────────────────────────────────────────
+
+    def _start_proxy_sidecar(self, issue_id: str, worktree_path: str) -> None:
+        """Start the read-only proxy as a background sidecar for frontend tasks.
+
+        Looks for proxy/readonly-proxy.cjs in the worktree. If not present (e.g.
+        the target repo doesn't have the proxy yet), logs a warning and continues
+        without a sidecar — the worker still runs, just without the write-blocking proxy.
+        """
+        proxy_script = Path(worktree_path) / "proxy" / "readonly-proxy.cjs"
+        if not proxy_script.exists():
+            logger.warning(
+                "proxy script not found at %s — frontend worker will run without write protection",
+                proxy_script,
+            )
+            return
+
+        try:
+            proc = subprocess.Popen(
+                ["node", str(proxy_script)],
+                cwd=worktree_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self._sidecars.setdefault(issue_id, []).append(proc)
+            write_event(issue_id, "proxy_started", pid=proc.pid, path=str(proxy_script))
+            logger.info("read-only proxy started issue=%s pid=%s", issue_id, proc.pid)
+        except Exception as e:
+            logger.warning("could not start proxy sidecar issue=%s: %s", issue_id, e)
+
+    def _stop_proxy_sidecar(self, issue_id: str) -> None:
+        """Terminate all sidecars for issue_id."""
+        for proc in self._sidecars.pop(issue_id, []):
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        if issue_id in self._sidecars:
+            del self._sidecars[issue_id]
+
     def shutdown(self) -> None:
         write_event("system", "orchestrator_stopping")
         for issue_id, runner in self._runners.items():
             runner.kill()
+            self._stop_proxy_sidecar(issue_id)
             run_state.update_run(issue_id, status="paused")
         self._linear.close()
