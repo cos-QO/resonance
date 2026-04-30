@@ -554,7 +554,36 @@ servers = d.get('mcpServers', d)
 print('yes' if 'figma' in servers else 'no')
 " 2>/dev/null || echo "no")
 
-    [[ "$has_linear" == "yes" ]] && ok "MCP: linear server configured" || { warn "MCP: linear server not found in .mcp.json"; ((issues++)); }
+    if [[ "$has_linear" == "yes" ]]; then
+      # Check that LINEAR_ACCESS_TOKEN is wired (linear-mcp uses this, not LINEAR_API_KEY)
+      has_token_env=$("$VENV_DIR/bin/python" -c "
+import json
+d = json.load(open('.mcp.json'))
+servers = d.get('mcpServers', d)
+linear = servers.get('linear', {})
+env = linear.get('env', {})
+print('yes' if 'LINEAR_ACCESS_TOKEN' in env else 'no')
+" 2>/dev/null || echo "no")
+      if [[ "$has_token_env" == "yes" ]]; then
+        ok "MCP: linear server configured  (LINEAR_ACCESS_TOKEN wired)"
+      else
+        info "Auto-adding LINEAR_ACCESS_TOKEN env mapping to linear MCP..."
+        "$VENV_DIR/bin/python" - <<'PYEOF'
+import json
+path = '.mcp.json'
+with open(path) as f:
+    cfg = json.load(f)
+servers = cfg.setdefault('mcpServers', cfg)
+servers['linear'].setdefault('env', {})['LINEAR_ACCESS_TOKEN'] = '${LINEAR_API_KEY}'
+with open(path, 'w') as f:
+    json.dump(cfg, f, indent=2)
+    f.write('\n')
+PYEOF
+        ok "MCP: linear  LINEAR_ACCESS_TOKEN env added"; ((fixed_count++))
+      fi
+    else
+      warn "MCP: linear server not found in .mcp.json"; ((issues++))
+    fi
     figma_key=$(get_env_key "FIGMA_API_KEY")
     if [[ "$has_figma" == "yes" ]]; then
       ok "MCP: figma server configured"
