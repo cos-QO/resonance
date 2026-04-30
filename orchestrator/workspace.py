@@ -18,6 +18,7 @@ The orchestrator writes a minimal .claude/settings.json into each worktree.
 """
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -207,6 +208,7 @@ class WorkspaceManager:
         except subprocess.CalledProcessError:
             # Branch may already exist from a prior failed attempt — try without -b
             _run(["git", "worktree", "add", str(path), branch])
+        _write_worktree_gitignore(path)
 
     def _write_agent_config(
         self,
@@ -268,6 +270,56 @@ class WorkspaceManager:
         memory_link = claude_dir / "memory"
         if not memory_link.exists():
             memory_link.symlink_to(repo_root / ".claude" / "memory")
+
+
+_WORKTREE_GITIGNORE = """\
+# Claude Code — developer config, not part of the output codebase
+.claude/
+.mcp.json
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Runtime / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+node_modules/
+dist/
+build/
+coverage/
+.coverage
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+"""
+
+
+def _write_worktree_gitignore(path: Path) -> None:
+    """Write a .gitignore and commit it so .claude/ is never pushed."""
+    gi = path / ".gitignore"
+    if gi.exists():
+        return
+    gi.write_text(_WORKTREE_GITIGNORE)
+    _res_env = {**os.environ,
+                "GIT_AUTHOR_NAME": "Resonance",
+                "GIT_AUTHOR_EMAIL": "resonance@queen.one",
+                "GIT_COMMITTER_NAME": "Resonance",
+                "GIT_COMMITTER_EMAIL": "resonance@queen.one"}
+    try:
+        subprocess.run(["git", "add", ".gitignore"], cwd=str(path), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: add .gitignore (orchestrator bootstrap)"],
+            cwd=str(path), check=True, capture_output=True, env=_res_env,
+        )
+    except subprocess.CalledProcessError as e:
+        logger.warning("could not commit .gitignore in worktree %s: %s", path, e)
 
 
 def _ensure_log_dir() -> None:

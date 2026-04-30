@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .config import load_config
 from .poller import Poller
+from . import tracer
 
 _LOG_DIR = Path("runs")
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,6 +37,9 @@ def main() -> None:
     except ValueError as e:
         logger.error("configuration error: %s", e)
         sys.exit(1)
+
+    tracer.load()
+    tracer.start_session()
 
     poller = Poller(config)
 

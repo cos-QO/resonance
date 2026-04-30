@@ -24,7 +24,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, RichLog, Static
+from textual.widgets import Footer, Header, Input, Label, RichLog, Static, Switch
 
 
 # ── Focusable widgets ─────────────────────────────────────────────────────────
@@ -903,6 +903,8 @@ def _help_content() -> str:
   [bold white]q[/bold white]    Quit                        [bold white]r[/bold white]    Refresh state
   [bold white]l[/bold white]    Refresh Linear pipeline     [bold white]p[/bold white]    Set or change project scope
   [bold white]Tab[/bold white]  Cycle run selection         [bold white]?[/bold white]    This help screen
+  [bold white]e[/bold white]    Event stream browser        [bold white]s[/bold white]    Debug tracing settings
+  [bold white]t[/bold white]    Debug trace viewer
 
   [dim]Run actions[/dim]  [dim](press Tab to select a run first — it shows [/dim][bold white]>[/bold white][dim] prefix)[/dim]
   [bold white]f[/bold white]    Send feedback to agent      [bold white]a[/bold white]    Approve / resume selected run
@@ -961,6 +963,179 @@ def _help_content() -> str:
 
 [dim]  Press Esc · ? · q  to close     Press d  to launch the demo[/dim]
 """
+
+
+# ── Settings modal ────────────────────────────────────────────────────────────
+
+class _SettingsModal(ModalScreen):
+    """Debug tracing settings — toggle capture categories and enable/disable."""
+
+    BINDINGS = [Binding("escape", "dismiss", "Cancel", priority=True)]
+
+    CSS = """
+    _SettingsModal { align: center middle; }
+    #_settings_box {
+        width: 64; height: auto;
+        background: $panel; border: round $accent; padding: 1 2;
+    }
+    #_settings_title { text-style: bold; color: $accent; margin-bottom: 1; }
+    #_settings_hint  { color: $text-muted; margin-top: 1; }
+    .settings-row    { height: 3; }
+    .settings-label  { width: 1fr; padding: 1 0; color: $text; }
+    .settings-sub    { color: $text-muted; text-style: italic; }
+    """
+
+    def __init__(self, settings: dict) -> None:
+        super().__init__()
+        self._settings = settings
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Horizontal
+        cats = self._settings.get("categories", {})
+        with Vertical(id="_settings_box"):
+            yield Label("  Debug Tracing Settings", id="_settings_title")
+            with Horizontal(classes="settings-row"):
+                yield Label(
+                    "  [bold]Enable debug tracing[/bold]\n  [dim]Write trace events to runs/traces/[/dim]",
+                    markup=True, classes="settings-label",
+                )
+                yield Switch(value=self._settings.get("enabled", False), id="sw_enabled")
+            yield Static("[dim]  ─── Capture categories (only when tracing is on) ──────[/dim]", markup=True)
+            for cat_id, cat_label, cat_desc in [
+                ("mcp",      "MCP tool calls",     "Full tool inputs + outputs from agent workers"),
+                ("linear",   "Linear API calls",   "Every GraphQL request + response from orchestrator"),
+                ("agent",    "Agent thinking",     "Full (untruncated) reasoning text + all signals"),
+                ("pipeline", "Pipeline decisions", "Task routing, dependency checks, state transitions"),
+            ]:
+                with Horizontal(classes="settings-row"):
+                    yield Label(
+                        f"  [bold]{cat_label}[/bold]\n  [dim]{cat_desc}[/dim]",
+                        markup=True, classes="settings-label",
+                    )
+                    yield Switch(value=cats.get(cat_id, True), id=f"sw_{cat_id}")
+            yield Static(
+                "  [dim]Traces saved to [bold]runs/traces/[/bold] · view with[/dim] [cyan]t[/cyan]",
+                markup=True, id="_settings_hint",
+            )
+            yield Label("  Enter to save · Esc to cancel", id="_settings_hint2")
+
+    def on_key(self, event) -> None:
+        if event.key in ("enter", "s"):
+            self._save()
+
+    def _save(self) -> None:
+        enabled = self.query_one("#sw_enabled", Switch).value
+        cats = {
+            "mcp":      self.query_one("#sw_mcp", Switch).value,
+            "linear":   self.query_one("#sw_linear", Switch).value,
+            "agent":    self.query_one("#sw_agent", Switch).value,
+            "pipeline": self.query_one("#sw_pipeline", Switch).value,
+        }
+        self.dismiss({"enabled": enabled, "categories": cats})
+
+
+# ── Trace viewer ──────────────────────────────────────────────────────────────
+
+class _TraceViewerScreen(ModalScreen):
+    """Browse the current debug trace file — shows MCP calls, Linear queries, pipeline decisions."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close", priority=True),
+        Binding("enter",  "open_detail", "Detail"),
+    ]
+
+    CSS = """
+    _TraceViewerScreen { align: center middle; }
+    #_trace_outer {
+        width: 140; height: 88vh;
+        background: $panel; border: round $accent; padding: 0;
+    }
+    #_trace_title  { padding: 0 2; color: $accent; text-style: bold; }
+    #_trace_list   { height: 1fr; }
+    #_trace_hint   { padding: 0 2; color: $text-muted; }
+    """
+
+    _CAT_COLOR = {
+        "mcp":      "bright_cyan",
+        "linear":   "steel_blue",
+        "agent":    "dim",
+        "pipeline": "bright_green",
+    }
+    _CAT_ICON = {
+        "mcp":      "⚙",
+        "linear":   "↗",
+        "agent":    "·",
+        "pipeline": "▶",
+    }
+
+    def __init__(self, events: list[dict]) -> None:
+        super().__init__()
+        self._events = events
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import ListView, ListItem
+        count = len(self._events)
+        with Vertical(id="_trace_outer"):
+            yield Static(
+                f"  Debug Trace — {count} event{'s' if count != 1 else ''}"
+                "  [dim](newest first)[/dim]",
+                markup=True, id="_trace_title",
+            )
+            items = []
+            for ev in reversed(self._events[-400:]):
+                ts    = ev.get("ts", "")
+                short = ts[11:19] if len(ts) > 10 else ts
+                cat   = ev.get("cat", "?")
+                etype = ev.get("type", "?")
+                issue = ev.get("issue", "")
+                color = self._CAT_COLOR.get(cat, "white")
+                icon  = self._CAT_ICON.get(cat, "·")
+                extra = self._format_extra(cat, etype, ev)
+                line = (
+                    f"[dim]{short}[/dim]  "
+                    f"[{color}]{icon} {cat:<8}[/{color}]  "
+                    f"[bold]{etype:<30}[/bold]  "
+                    + (f"[bold cyan]{issue:<10}[/bold cyan]  " if issue else "            ")
+                    + f"[dim]{extra}[/dim]"
+                )
+                items.append(ListItem(Static(line, markup=True)))
+            yield ListView(*items, id="_trace_list")
+            yield Static("  ↑↓ navigate   Enter detail   Esc close", id="_trace_hint")
+
+    def _format_extra(self, cat: str, etype: str, ev: dict) -> str:
+        if cat == "mcp":
+            tool = ev.get("tool", "")
+            if etype == "mcp_call":
+                inp = ev.get("inputs", {})
+                first_val = next(iter(inp.values()), "") if inp else ""
+                return f"{tool}  {str(first_val)[:60]}"
+            else:
+                outputs = ev.get("outputs", "")
+                err = "⚠ error  " if ev.get("error") else ""
+                return f"{err}{tool}  {str(outputs)[:60]}"
+        if cat == "linear":
+            method = ev.get("method", "")
+            ms = ev.get("elapsed_ms", "")
+            resp = ev.get("response", {})
+            resp_short = str(resp)[:60] if resp else ""
+            return f"{method}  {ms}ms  {resp_short}"
+        if cat == "agent":
+            if etype == "agent_thinking_full":
+                return ev.get("text", "")[:80]
+            return str({k: v for k, v in ev.items() if k not in {"ts", "cat", "type", "issue"}})[:80]
+        if cat == "pipeline":
+            decision = ev.get("decision", "")
+            extra = {k: v for k, v in ev.items() if k not in {"ts", "cat", "type", "issue", "decision"}}
+            return f"{decision}  " + "  ".join(f"{k}={str(v)[:25]}" for k, v in list(extra.items())[:3])
+        return ""
+
+    def action_open_detail(self) -> None:
+        lv = self.query_one("#_trace_list")
+        idx = lv.index
+        if idx is not None:
+            evs = list(reversed(self._events[-400:]))
+            if 0 <= idx < len(evs):
+                self.push_screen(_EventDetailScreen(evs[idx]))
 
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -1310,6 +1485,12 @@ def _header_bar(runs: dict) -> Text:
     failed  = c.get("failed", 0)
     alive   = _orch_alive()
 
+    try:
+        from orchestrator import tracer as _tracer
+        tracing = _tracer.is_enabled()
+    except Exception:
+        tracing = False
+
     t = Text()
     t.append("  ")
     t.append("● orch  ", style="bold green" if alive else "bold red")
@@ -1317,6 +1498,8 @@ def _header_bar(runs: dict) -> Text:
     t.append(f"● {running} running  ", style="bold green"  if running else "grey50")
     t.append(f"● {waiting} waiting  ", style="bold yellow" if waiting else "grey50")
     t.append(f"● {failed} failed",     style="bold red"    if failed  else "grey50")
+    if tracing:
+        t.append("  ● trace", style="bold bright_magenta")
     return t
 
 
@@ -1809,6 +1992,8 @@ class ResonanceDashboard(App):
         Binding("question_mark", "help",           "Help"),
         Binding("d",             "demo",           "Demo",     show=False),
         Binding("e",             "event_browser",  "Events",   show=False),
+        Binding("s",             "settings",       "Settings", show=False),
+        Binding("t",             "trace_viewer",   "Traces",   show=False),
     ]
 
     def __init__(self) -> None:
@@ -2051,6 +2236,26 @@ class ResonanceDashboard(App):
         self._tick()
         self._draw_pipeline()
         self.notify("Refreshed", timeout=1.0)
+
+    def action_settings(self) -> None:
+        from orchestrator import tracer as _tracer
+        settings = _tracer.get_settings()
+
+        def _on_save(result: Optional[dict]) -> None:
+            if result:
+                _tracer.save(result["enabled"], result["categories"])
+                status = "enabled" if result["enabled"] else "disabled"
+                self.notify(f"Debug tracing {status}", timeout=2.0)
+
+        self.push_screen(_SettingsModal(settings), _on_save)
+
+    def action_trace_viewer(self) -> None:
+        from orchestrator import tracer as _tracer
+        events = _tracer.read_latest_trace(500)
+        if not events:
+            self.notify("No trace data — enable debug tracing with [s]", timeout=3.0)
+            return
+        self.push_screen(_TraceViewerScreen(events))
 
     def action_refresh_linear(self) -> None:
         self.notify("Fetching from Linear…", timeout=3.0)

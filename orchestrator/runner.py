@@ -18,6 +18,7 @@ from typing import Optional
 from .config import Config
 from .events import write as write_event
 from . import state as run_state
+from . import tracer
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,8 @@ class Runner:
         self._stdout_thread: Optional[threading.Thread] = None
         self._done = threading.Event()
         self._output_tail: list[str] = []  # last 30 lines for error diagnosis
+        # tool_id → tool_name mapping so we can pair tool_result with tool_use
+        self._pending_tool_calls: dict[str, str] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -242,17 +245,43 @@ class Runner:
                         first = text.strip().split("\n")[0][:120]
                         if first:
                             write_event(self._issue_id, "agent_thinking", text=first)
+                        # Full untruncated thinking to trace (debug mode only)
+                        if tracer.is_enabled("agent"):
+                            tracer.agent_thinking_full(self._issue_id, text)
                 elif ctype == "tool_use":
-                    tool_name = item.get("name", "")
+                    tool_name  = item.get("name", "")
                     tool_input = item.get("input", {})
+                    tool_id    = item.get("id", "")
                     label, detail = _describe_tool_call(tool_name, tool_input)
                     write_event(self._issue_id, "agent_action", label=label, detail=detail)
+                    # Full MCP call trace
+                    if tracer.is_enabled("mcp") and tool_name.startswith("mcp__"):
+                        tracer.mcp_call(self._issue_id, tool_name, tool_id, tool_input)
+                    # Track pending tool IDs so we can pair results
+                    self._pending_tool_calls[tool_id] = tool_name
+
+        elif event_type == "user":
+            # tool_result blocks appear here in response to prior tool_use
+            for item in event.get("message", {}).get("content", []):
+                if item.get("type") != "tool_result":
+                    continue
+                tool_id  = item.get("tool_use_id", "")
+                tool_name = self._pending_tool_calls.pop(tool_id, "")
+                if tracer.is_enabled("mcp") and tool_name.startswith("mcp__"):
+                    outputs = item.get("content", "")
+                    is_err  = bool(item.get("is_error", False))
+                    tracer.mcp_result(self._issue_id, tool_name, tool_id, outputs, is_err)
 
         elif event_type == "result":
             # Final result event — signal may live in the "result" text field
             result_text = event.get("result", "")
             if result_text:
                 self._scan_for_signal(result_text)
+            if tracer.is_enabled("agent"):
+                tracer.record("agent", "agent_result",
+                              issue_id=self._issue_id,
+                              result=result_text,
+                              exit_code=event.get("exit_code"))
 
         elif event_type == "usage":
             write_event(

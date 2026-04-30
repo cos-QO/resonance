@@ -4,9 +4,12 @@ All state transitions and comments flow through here.
 Uses httpx for sync HTTP (orchestrator is single-threaded at the network layer).
 """
 import logging
+import time
 from typing import Optional
 
 import httpx
+
+from . import tracer
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +68,36 @@ REQUIRED_LABELS = [
 ]
 
 
+def _gql_method(query: str) -> str:
+    """Extract the outermost operation name from a GQL query string."""
+    import re
+    m = re.search(r'\b(query|mutation)\s+(\w+)', query)
+    if m:
+        return m.group(2)
+    m = re.search(r'{\s*(\w+)', query)
+    return m.group(1) if m else query.strip()[:40]
+
+
+def _summarise_response(data: dict) -> dict:
+    """Return a compact summary of a Linear GraphQL response for tracing."""
+    summary: dict = {}
+    for key, val in data.items():
+        if isinstance(val, dict):
+            if "nodes" in val:
+                summary[key] = f"[{len(val['nodes'])} nodes]"
+            elif "id" in val:
+                summary[key] = {"id": val["id"], "identifier": val.get("identifier", "")}
+            elif "success" in val:
+                summary[key] = {"success": val["success"]}
+            else:
+                summary[key] = {k: v for k, v in list(val.items())[:4]}
+        elif isinstance(val, list):
+            summary[key] = f"[{len(val)} items]"
+        else:
+            summary[key] = val
+    return summary
+
+
 class LinearClient:
     def __init__(self, api_key: str):
         self._headers = {
@@ -78,16 +111,32 @@ class LinearClient:
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
+        t0 = time.monotonic()
         resp = self._client.post(LINEAR_API, json=payload)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+
         if resp.status_code >= 400:
             try:
                 detail = resp.json()
             except Exception:
                 detail = resp.text
+            if tracer.is_enabled("linear"):
+                method = _gql_method(query)
+                tracer.linear_query(method, variables, {"error": str(detail)[:200]}, elapsed_ms)
             raise RuntimeError(f"Linear API {resp.status_code}: {detail}")
+
         body = resp.json()
         if "errors" in body:
+            if tracer.is_enabled("linear"):
+                method = _gql_method(query)
+                tracer.linear_query(method, variables, {"graphql_errors": body["errors"]}, elapsed_ms)
             raise RuntimeError(f"Linear GraphQL error: {body['errors']}")
+
+        if tracer.is_enabled("linear"):
+            method = _gql_method(query)
+            response_summary = _summarise_response(body.get("data", {}))
+            tracer.linear_query(method, variables, response_summary, elapsed_ms)
+
         return body["data"]
 
     # ── Auth / viewer ─────────────────────────────────────────────────────────
