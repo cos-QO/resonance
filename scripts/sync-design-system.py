@@ -1,309 +1,460 @@
 #!/usr/bin/env python3
 """
-Sync ConnectUI design tokens from queen-one/connect-ui on GitHub.
+Sync ConnectUI design tokens and component catalogue from connect-ui.
 
-Fetches the design token source files and regenerates:
-  .claude/memory/standards/connectui-design-system.md
+Preferred: read from a local clone (--local-path).
+Fallback:  fetch from GitHub (requires public repo or GITHUB_TOKEN env var).
 
-Run manually or on a schedule to keep agent context current.
+Regenerates:
+  .claude/memory/standards/connectui-design-system.md  — tokens, palette, components
+  .claude/memory/standards/connectui-stack.md          — dependency versions (local only)
 
 Usage:
-  python3 scripts/sync-design-system.py
-  python3 scripts/sync-design-system.py --check   # exit 1 if stale, no write
+  python3 scripts/sync-design-system.py --local-path /path/to/connect-ui
+  python3 scripts/sync-design-system.py                           # GitHub fallback
+  python3 scripts/sync-design-system.py --check --local-path ...  # staleness check
 """
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.request
 from datetime import date
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-REPO = "queen-one/connect-ui"
+REPO   = "queen-one/connect-ui"
 BRANCH = "main"
-BASE_URL = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/src/design-tokens"
-
-TOKEN_FILES = [
-    "material-colors.ts",
-    "palette.ts",
-    "typography.ts",
-    "spacing.ts",
-    "shape.ts",
-]
+BASE_URL = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 
 OUTPUT_PATH = Path(".claude/memory/standards/connectui-design-system.md")
 STACK_PATH  = Path(".claude/memory/standards/connectui-stack.md")
 
 
-def fetch(filename: str) -> str:
-    url = f"{BASE_URL}/{filename}"
+# ── Source readers ────────────────────────────────────────────────────────────
+
+def read_local(local_path: Path, rel: str) -> str:
+    p = local_path / rel
+    if p.exists():
+        return p.read_text(encoding="utf-8")
+    return ""
+
+
+def fetch_github(rel: str) -> str:
+    token = os.environ.get("GITHUB_TOKEN", "")
+    req = urllib.request.Request(f"{BASE_URL}/{rel}")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(url, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=10) as r:
             return r.read().decode()
     except Exception as e:
-        print(f"  WARNING: could not fetch {filename}: {e}", file=sys.stderr)
+        print(f"  WARNING: could not fetch {rel}: {e}", file=sys.stderr)
         return ""
 
 
-def extract_hex_colors(material_colors_src: str) -> dict[str, dict[str, str]]:
-    """Parse materialColors object from TypeScript source."""
-    colors: dict[str, dict[str, str]] = {}
-    current_key = None
-    for line in material_colors_src.splitlines():
-        key_match = re.match(r"\s+(\w+):\s*\{", line)
-        if key_match:
-            current_key = key_match.group(1)
-            colors[current_key] = {}
-        hex_match = re.match(r"\s+(\d+):\s*[\"'](#[0-9A-Fa-f]{6})[\"']", line)
-        if hex_match and current_key:
-            colors[current_key][hex_match.group(1)] = hex_match.group(2)
-    return colors
+
+# ── Token parsers ─────────────────────────────────────────────────────────────
 
 
-def extract_spacing(spacing_src: str) -> list[tuple[int, int]]:
-    """Parse spacing scale from TypeScript source."""
-    pairs = []
-    for line in spacing_src.splitlines():
-        m = re.match(r"\s+(\d+):\s*(\d+),", line)
-        if m:
-            pairs.append((int(m.group(1)), int(m.group(2))))
-    return pairs
+def extract_spacing_array(theme_src: str) -> List[int]:
+    """Parse `spacing: [0, 4, 8, ...]` from theme.ts — returns list of px values."""
+    m = re.search(r'spacing:\s*\[([^\]]+)\]', theme_src)
+    if not m:
+        return []
+    return [int(v.strip()) for v in m.group(1).split(",") if v.strip().isdigit()]
 
 
-def extract_shape(shape_src: str) -> list[tuple[str, int]]:
-    """Parse border radius tokens."""
-    pairs = []
-    for line in shape_src.splitlines():
-        m = re.match(r"\s+(\w+):\s*(\d+),", line)
-        if m:
-            pairs.append((m.group(1), int(m.group(2))))
-    return pairs
+def extract_typography_variants(theme_src: str) -> List[Tuple[str, str, int]]:
+    """Parse named typography variants — returns [(variant, fontSize, fontWeight), ...]."""
+    results: List[Tuple[str, str, int]] = []
+    current_variant = None
+    current_size = None
+    current_weight = None
+    depth = 0
+    in_typography = False
+
+    for line in theme_src.splitlines():
+        if re.search(r'\btypography\s*:\s*\{', line) and not in_typography:
+            in_typography = True
+            depth = 1
+            continue
+        if in_typography:
+            depth += line.count('{') - line.count('}')
+            if depth <= 0:
+                break
+            # New variant (e.g. "h1: {" or "body1: {")
+            vm = re.match(r'\s+(h[1-6]|body[123]|subtitle[123]|button[12]?|caption|overline|chipLabel)\s*:\s*\{', line)
+            if vm:
+                if current_variant and current_size:
+                    results.append((current_variant, current_size, current_weight or 400))
+                current_variant = vm.group(1)
+                current_size = None
+                current_weight = None
+            sz = re.search(r'fontSize:\s*["\']([0-9.]+px)["\']', line)
+            if sz and current_variant:
+                current_size = sz.group(1)
+            wt = re.search(r'fontWeight:\s*(\d+)', line)
+            if wt and current_variant:
+                current_weight = int(wt.group(1))
+
+    if current_variant and current_size:
+        results.append((current_variant, current_size, current_weight or 400))
+    return results
 
 
-def extract_typography(typo_src: str) -> dict:
-    """Parse typography tokens."""
-    result: dict = {"fontFamily": "Poppins", "weights": [], "sizes": []}
-    for line in typo_src.splitlines():
-        ff = re.search(r'fontFamily:\s*["\'](\w+)["\']', line)
-        if ff:
-            result["fontFamily"] = ff.group(1)
-        wm = re.match(r'\s+(\w+):\s*(\d+),', line)
-        if wm and "weight" in wm.group(1).lower():
-            result["weights"].append((wm.group(1), int(wm.group(2))))
-        sz = re.match(r'\s+"([0-9.]+rem)":\s*(\d+),', line)
-        if sz:
-            result["sizes"].append((sz.group(1), int(sz.group(2))))
+def extract_queen_palette(theme_src: str) -> Dict[str, str]:
+    """Pull the queen: { n: '#hex', ... } value block from theme.ts.
+
+    Skips TypeScript interface/declare blocks (which also contain `queen: {`)
+    and targets the actual palette values inside createTheme().
+    """
+    palette: Dict[str, str] = {}
+    in_queen = False
+    in_ts_decl = False
+    depth = 0
+
+    for line in theme_src.splitlines():
+        # Track when we're inside a TypeScript declaration block
+        if re.search(r'\b(interface|declare)\b', line):
+            in_ts_decl = True
+        if in_ts_decl:
+            depth += line.count('{') - line.count('}')
+            if depth <= 0:
+                in_ts_decl = False
+                depth = 0
+            continue
+
+        if re.search(r'\bqueen\s*:\s*\{', line) and not in_queen:
+            in_queen = True
+            depth = 1
+            continue
+
+        if in_queen:
+            depth += line.count('{') - line.count('}')
+            if depth <= 0:
+                break
+            m = re.match(r'\s+(\w+)\s*:\s*"(#[0-9A-Fa-f]{6})"', line)
+            if m:
+                palette[m.group(1)] = m.group(2)
+    return palette
+
+
+def scan_components(local_path: Path) -> Dict[str, List[str]]:
+    """Scan src/components/ for Orion components and a broader component list."""
+    result: Dict[str, List[str]] = {"orion": [], "shared": []}
+    components_dir = local_path / "src" / "components"
+    if not components_dir.exists():
+        return result
+
+    for entry in sorted(components_dir.iterdir()):
+        name = entry.name
+        if name.startswith("."):
+            continue
+        if name.startswith("Orion"):
+            if entry.is_dir():
+                # Expand subdirectory (e.g. OrionComponents/)
+                for child in sorted(entry.iterdir()):
+                    if child.suffix == ".tsx" and child.stem.startswith("Orion"):
+                        result["orion"].append(child.stem)
+            else:
+                result["orion"].append(name.replace(".tsx", ""))
+        else:
+            result["shared"].append(name.replace(".tsx", "") if name.endswith(".tsx") else name)
     return result
 
 
-def generate_md(colors: dict, spacing: list, shape: list, typo: dict) -> str:
+def read_package_versions(local_path: Path) -> Dict[str, str]:
+    """Extract key dependency versions from package.json."""
+    pkg = local_path / "package.json"
+    if not pkg.exists():
+        return {}
+    try:
+        data = json.loads(pkg.read_text())
+        all_deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+        keys = [
+            "react", "@mui/material", "@tanstack/react-router",
+            "@tanstack/react-query", "@tanstack/react-form",
+            "zustand", "firebase", "typescript", "vite",
+            "@storybook/react-vite",
+        ]
+        return {k: all_deps[k] for k in keys if k in all_deps}
+    except Exception:
+        return {}
+
+
+# ── Document generators ───────────────────────────────────────────────────────
+
+def generate_design_system_md(
+    queen_palette: Dict,
+    spacing: List,
+    typo_variants: List,
+    components: Dict,
+    local_path: Optional[Path],
+) -> str:
     today = date.today().isoformat()
-    v = colors.get("violet", {})
-    p = colors.get("pink", {})
-    o = colors.get("onyx", {})
+    source_note = f"local clone at `{local_path}`" if local_path else f"{REPO} on GitHub"
 
     lines = [
         "# ConnectUI Design System Reference",
         "",
-        f"**Source**: {REPO} (auto-synced from design tokens)",
+        f"**Source**: {source_note}",
         f"**Last Updated**: {today}",
-        "**Stack**: React + MUI v7 + Queen One Orion Design System",
+        "**Stack**: React + MUI v7 + Queen One design system",
+        "",
+        "---",
+        "",
+        "## Component Structure",
+        "",
+        "Components live in `src/components/`. Orion components are Queen-custom styled wrappers.",
+        "",
+    ]
+
+    if components.get("orion"):
+        lines += [
+            "### Orion Components (Queen custom — check before building new ones)",
+            "| Component |",
+            "|-----------|",
+        ]
+        for c in components["orion"]:
+            name = c.replace(".tsx", "")
+            lines.append(f"| `{name}` |")
+
+    lines += [
         "",
         "---",
         "",
         "## Color Palette",
         "",
-        "Always use theme palette tokens — never hardcode hex values.",
+        "**Never hardcode hex values** — always reference theme palette tokens.",
         "",
-        "### Brand Colors",
-        "| Color | Scale | Hex |",
-        "|-------|-------|-----|",
     ]
 
-    for scale, hex_ in sorted(v.items(), key=lambda x: int(x[0])):
-        suffix = ""
-        if scale == "400":
-            suffix = " ← **primary.main**"
-        elif scale == "600":
-            suffix = " ← primary.dark"
-        lines.append(f"| violet | [{scale}] | `{hex_}`{suffix} |")
-
-    for scale, hex_ in sorted(p.items(), key=lambda x: int(x[0])):
-        suffix = " ← **secondary.main**" if scale == "400" else ""
-        lines.append(f"| pink | [{scale}] | `{hex_}`{suffix} |")
-
-    for scale, hex_ in sorted(o.items(), key=lambda x: int(x[0])):
-        suffix = ""
-        if scale == "50":
-            suffix = " ← white / contrastText"
-        elif scale == "600":
-            suffix = " ← text.primary"
-        lines.append(f"| onyx | [{scale}] | `{hex_}`{suffix} |")
-
-    primary_main = v.get("400", "#7700EE")
-    secondary_main = p.get("400", "#EC407A")
-    white = o.get("50", "#FFFFFF")
-    text_primary = o.get("600", "#252327")
+    if queen_palette:
+        lines += [
+            "### Queen Palette (`theme.palette.queen[N]`)",
+            "| Scale | Hex |",
+            "|-------|-----|",
+        ]
+        for scale, hex_ in sorted(queen_palette.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 0):
+            lines.append(f"| {scale} | `{hex_}` |")
 
     lines += [
         "",
-        "### Semantic Palette",
-        "| Token | Hex |",
-        "|-------|-----|",
-        f"| `primary.main` | `{primary_main}` |",
-        f"| `secondary.main` | `{secondary_main}` |",
-        f"| `text.primary` | `{text_primary}` |",
-        f"| `text.contrastText` | `{white}` |",
+        "### Standard Palette References",
+        "- `theme.palette.primary.main` — `#7F1BF6` (Queen violet)",
+        "- `theme.palette.secondary.main` — `#EC407A` (Queen pink)",
+        "- `theme.palette.text.primary` — `#252327`",
+        "- `theme.palette.text.secondary` — `#7C7B7D`",
+        "- `theme.palette.background.default` — `#FFFFFB`",
+        "- `theme.palette.alert.info/success/warning/error`",
+    ]
+
+    lines += [
         "",
         "---",
         "",
         "## Typography",
         "",
-        f"- **Primary font**: {typo.get('fontFamily', 'Poppins')} (body, inputs, all text)",
-        "- **Secondary font**: Cabinet Grotesk (labels, some headings)",
-        "- **Base size**: 16px (1rem)",
+        "- **Primary font**: Poppins",
+        "- **Font family string**: `Poppins, Arial, sans-serif`",
         "",
-        "### Font Weights",
-        "| Name | Value |",
-        "|------|-------|",
     ]
 
-    for name, val in typo.get("weights", []):
-        lines.append(f"| {name} | {val} |")
+    if typo_variants:
+        lines += ["### Variants", "| Variant | Size | Weight |", "|---------|------|--------|"]
+        for variant, size, weight in typo_variants:
+            lines.append(f"| `{variant}` | {size} | {weight} |")
+
+    if spacing:
+        lines += [
+            "",
+            "---",
+            "",
+            "## Spacing Scale",
+            "",
+            "**CRITICAL**: ConnectUI uses a CUSTOM spacing scale — NOT `n * 8px`.",
+            "Use integer index `n` in `sx` props (e.g. `mt: 2` = 8px, `mt: 3` = 12px).",
+            "",
+            "| Index (n) | px |",
+            "|-----------|-----|",
+        ]
+        for i, px in enumerate(spacing):
+            lines.append(f"| {i} | {px}px |")
+        lines.append("")
+        lines.append("For values outside this scale: use pixel strings (`gap: '6px'`).")
 
     lines += [
-        "",
-        "### Font Sizes",
-        "| rem | px |",
-        "|-----|----|",
-    ]
-    for rem, px in typo.get("sizes", []):
-        lines.append(f"| {rem} | {px}px |")
-
-    lines += [
-        "",
-        "---",
-        "",
-        "## Spacing Scale",
-        "",
-        "**CRITICAL**: ConnectUI uses a CUSTOM spacing scale. `theme.spacing(n)` does NOT equal `n * 8px`.",
-        "Use integer values only — never decimals.",
-        "",
-        "| n | px |",
-        "|---|----|",
-    ]
-    for n, px in spacing:
-        lines.append(f"| {n} | {px}px |")
-
-    lines += [
-        "",
-        "For spacing not in this scale: use `gap`, `rowGap`, `columnGap` with pixel strings (e.g. `gap: '6px'`).",
-        "",
-        "---",
-        "",
-        "## Shape (Border Radius)",
-        "",
-        "| Name | px |",
-        "|------|----|",
-    ]
-    for name, px in shape:
-        lines.append(f"| {name} | {px}px |")
-
-    lines += [
-        "",
-        "---",
-        "",
-        "## Orion Components",
-        "",
-        "Custom styled components in `src/orion/OrionComponents/`. Always check these before building new ones.",
-        "",
-        "| Component | Purpose |",
-        "|-----------|---------|",
-        "| `OrionBorderCard` | Card with border styling |",
-        "| `OrionIconButton` | Icon-only button |",
-        "| `OrionInput` | Form text input with TanStack Form integration |",
-        "| `OrionPageHeader` | Page title + breadcrumb + description + actions |",
-        "| `OrionPopoverMenu` | Popover/dropdown menu |",
-        "| `OrionSnackbar` | Toast notification |",
-        "| `OrionSwitch` | Toggle switch |",
-        "| `OrionToggleButtonGroup` | Multi-option toggle |",
-        "",
-        "## MUI Components (re-exports)",
-        "",
-        "`src/orion/MuiComponents/` — exported as const, no function wrappers.",
-        "Import directly: `import { MuiButton } from '../MuiComponents/MuiButton'`",
         "",
         "---",
         "",
         "## Key Conventions",
         "",
-        "- **No barrel imports** — direct file imports only",
-        "- **Integer spacing only** — no decimals in sx spacing props",
-        "- **shouldForwardProp** required on styled components with custom props",
-        "- **Cabinet Grotesk** for labels; **Poppins** for body/inputs",
-        "- **Never hardcode hex** — reference theme palette tokens",
-        "- **MUI v7** — use `slotProps` instead of deprecated `InputProps` etc.",
+        "- **No barrel imports** — direct file imports: `import { X } from './X/X'`, never from `index`",
+        "- **Integer spacing only** — no decimals in `m`, `p`, `borderRadius` sx props",
+        "- **shouldForwardProp** required on all styled components with custom props",
+        "- **Never hardcode hex** — reference theme palette tokens (`theme.palette.queen[400]` etc.)",
+        "- **MUI v7** — use `slotProps` (not deprecated `InputProps`, `MenuProps`)",
+        "- **pnpm only** — never npm or yarn",
+        "- **Strict TypeScript** — no `any`, explicit return types on exported functions",
+        "- **Feature flags**: `VITE_FF_*` prefix, access via `import.meta.env.VITE_FF_*`",
         "",
         "---",
         "",
         "## Storybook Patterns",
         "",
-        "Every new component needs a `.stories.tsx` with:",
+        "Every new component needs a `.stories.tsx` file with:",
         "- `STORYBOOK_PROPS` as `const` tuple",
         "- `tags: ['autodocs']` in meta",
-        '- MUI title: `"MUI Components/Mui [Name]"`',
-        '- Orion title: `"Orion Components/Orion [Name]"`',
-        "- Up to 5 sub-stories based on real repo usage",
+        "- Orion story title: `\"Orion Components/Orion [Name]\"`",
+        "- Up to 5 sub-stories based on real usage in the repo",
     ]
 
     return "\n".join(lines) + "\n"
 
 
+def generate_stack_md(versions: Dict) -> str:
+    """Update the stack doc with exact pinned dependency versions."""
+    today = date.today().isoformat()
+    lines = [
+        "# ConnectUI Technology Stack",
+        "",
+        f"**Last Updated**: {today}",
+        "**Source**: `package.json` (auto-synced)",
+        "",
+        "---",
+        "",
+        "## Core Dependencies (pinned versions)",
+        "",
+        "| Package | Version |",
+        "|---------|---------|",
+    ]
+    for pkg, ver in sorted(versions.items()):
+        lines.append(f"| `{pkg}` | `{ver}` |")
+
+    lines += [
+        "",
+        "---",
+        "",
+        "## Architecture",
+        "",
+        "| Layer | Technology |",
+        "|-------|-----------|",
+        "| Language | TypeScript strict (no `any`) |",
+        "| Runtime | Node 20+ |",
+        "| Package manager | **pnpm only** (never npm/yarn) |",
+        "| Bundler | Vite |",
+        "| UI | React + MUI v7 + Queen One design system |",
+        "| Routing | TanStack Router v1 (file-based, `src/routes/`) |",
+        "| Server state | TanStack Query v5 |",
+        "| Form state | TanStack Form v1 + Zod |",
+        "| Client state | Zustand + Immer |",
+        "| Backend | Firebase (Auth, Firestore, Storage) |",
+        "| Tests | Vitest + Playwright |",
+        "| Components | Storybook |",
+        "",
+        "## State Hierarchy (use in this order)",
+        "",
+        "1. **React Query** — server state (`useQuery`, `useMutation`)",
+        "2. **React Query cache** — derived global client state",
+        "3. **useState / useReducer** — component-local state",
+        "4. **TanStack Form** — form state (with Zod validation)",
+        "5. **Zustand** — cross-component client state",
+        "",
+        "## Project Structure",
+        "",
+        "```",
+        "src/",
+        "  components/     shared + Orion components",
+        "  features/       feature-scoped code (components, hooks, queries)",
+        "  hooks/          shared/generic hooks only",
+        "  routes/         TanStack Router file-based routes",
+        "  routeTree.gen.ts  AUTO-GENERATED — never edit",
+        "  theme.ts        MUI theme override (authoritative design tokens)",
+        "  stories/        cross-feature Storybook stories",
+        "```",
+        "",
+        "## Anti-patterns",
+        "",
+        "- No Context API for server state (React Query handles this)",
+        "- No prop drilling beyond 2 levels",
+        "- No Redux",
+        "- No `routeTree.gen.ts` edits",
+        "- No barrel imports (`index.ts` re-exports)",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true", help="check for staleness only")
+    parser.add_argument("--local-path", help="absolute path to local connect-ui repo")
+    parser.add_argument("--check", action="store_true", help="exit 1 if stale, no write")
     args = parser.parse_args()
 
-    print("Fetching ConnectUI design tokens from GitHub...")
-    sources = {f: fetch(f) for f in TOKEN_FILES}
+    local_path = Path(args.local_path).resolve() if args.local_path else None
 
-    if all(not v for v in sources.values()):
-        print("ERROR: all fetches failed — check network / repo access", file=sys.stderr)
+    if local_path:
+        print(f"Reading from local path: {local_path}")
+    else:
+        print(f"Fetching from GitHub: {REPO}")
+
+    # All design tokens live in src/theme.ts
+    theme_src = ""
+    if local_path:
+        theme_src = read_local(local_path, "src/theme.ts")
+    if not theme_src:
+        theme_src = fetch_github("src/theme.ts")
+    if not theme_src:
+        print("ERROR: could not read src/theme.ts from local path or GitHub", file=sys.stderr)
         return 1
 
-    colors = extract_hex_colors(sources.get("material-colors.ts", ""))
-    spacing = extract_spacing(sources.get("spacing.ts", ""))
-    shape = extract_shape(sources.get("shape.ts", ""))
-    typo_src = sources.get("typography.ts", "")
-    typo: dict = {"fontFamily": "Poppins", "weights": [], "sizes": []}
-    for line in typo_src.splitlines():
-        wm = re.match(r'\s+(\w+):\s*(\d+),', line)
-        if wm:
-            name = wm.group(1)
-            val = int(wm.group(2))
-            if any(w in name.lower() for w in ("light", "regular", "medium", "semibold", "bold")):
-                typo["weights"].append((name, val))
-        sz = re.match(r'\s+"([0-9.]+rem)":\s*(\d+),', line)
-        if sz:
-            typo["sizes"].append((sz.group(1), int(sz.group(2))))
+    # Parse tokens from theme.ts
+    queen_palette  = extract_queen_palette(theme_src)
+    spacing        = extract_spacing_array(theme_src)
+    typo_variants  = extract_typography_variants(theme_src)
 
-    new_content = generate_md(colors, spacing, shape, typo)
+    # Scan components (local only)
+    components: Dict[str, List[str]] = {"orion": [], "shared": []}
+    if local_path:
+        components = scan_components(local_path)
+
+    # Read package versions (local only)
+    versions: Dict[str, str] = {}
+    if local_path:
+        versions = read_package_versions(local_path)
+
+    new_design_md = generate_design_system_md(
+        queen_palette, spacing, typo_variants, components, local_path
+    )
+
+    def _strip_date(s: str) -> str:
+        return re.sub(r"\*\*Last Updated\*\*:.*", "", s)
 
     if args.check:
+        stale = False
         if OUTPUT_PATH.exists():
-            existing = OUTPUT_PATH.read_text()
-            # Compare everything except the date line
-            def strip_date(s: str) -> str:
-                return re.sub(r"\*\*Last Updated\*\*:.*", "", s)
-            if strip_date(existing) == strip_date(new_content):
-                print("Design system reference is up to date.")
-                return 0
-        print("Design system reference is stale or missing.", file=sys.stderr)
-        return 1
+            if _strip_date(OUTPUT_PATH.read_text()) != _strip_date(new_design_md):
+                stale = True
+                print("connectui-design-system.md is stale", file=sys.stderr)
+            else:
+                print("connectui-design-system.md is up to date")
+        else:
+            stale = True
+            print("connectui-design-system.md is missing", file=sys.stderr)
+        return 1 if stale else 0
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(new_content)
+    OUTPUT_PATH.write_text(new_design_md)
     print(f"Updated: {OUTPUT_PATH}")
+
+    if versions:
+        new_stack_md = generate_stack_md(versions)
+        STACK_PATH.write_text(new_stack_md)
+        print(f"Updated: {STACK_PATH}")
+
     print("Done.")
     return 0
 
