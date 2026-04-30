@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "linear": {
+      "command": "node",
+      "args": [
+        "/path/to/npm-global/lib/node_modules/linear-mcp/build/index.js"
+      ]
+    },
+    "figma": {
+      "command": "npx",
+      "args": ["-y", "figma-developer-mcp", "--stdio"],
+      "env": {
+        "FIGMA_API_KEY": "${FIGMA_API_KEY}"
+      }
+    }
+  }
+}

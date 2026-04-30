@@ -559,8 +559,23 @@ print('yes' if 'figma' in servers else 'no')
     if [[ "$has_figma" == "yes" ]]; then
       ok "MCP: figma server configured"
     elif [[ -n "$figma_key" ]]; then
-      warn "MCP: figma server not in .mcp.json but FIGMA_API_KEY is set — design tasks may not work"
-      ((issues++))
+      info "Auto-adding figma MCP server to .mcp.json..."
+      "$VENV_DIR/bin/python" - <<'PYEOF'
+import json, sys
+path = '.mcp.json'
+with open(path) as f:
+    cfg = json.load(f)
+cfg.setdefault('mcpServers', {})['figma'] = {
+    'command': 'npx',
+    'args': ['-y', 'figma-developer-mcp', '--stdio'],
+    'env': {'FIGMA_API_KEY': '${FIGMA_API_KEY}'}
+}
+with open(path, 'w') as f:
+    json.dump(cfg, f, indent=2)
+    f.write('\n')
+print('done')
+PYEOF
+      ok "MCP: figma server added to .mcp.json"; ((fixed_count++))
     else
       dim "    MCP: figma server not configured (no FIGMA_API_KEY — optional)"
     fi
