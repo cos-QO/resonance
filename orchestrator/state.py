@@ -14,7 +14,7 @@ COMMANDS_PATH = Path("runs/commands.jsonl")
 
 _lock = threading.Lock()
 
-ACTIVE_STATUSES = {"running", "paused", "waiting_human", "needs_input"}
+ACTIVE_STATUSES = {"running", "paused", "waiting_human", "needs_input", "monitoring"}
 TERMINAL_STATUSES = {"failed", "complete", "archived"}
 
 
@@ -60,6 +60,7 @@ def create_run(
             "artifacts": {},
             "pending_question": None,
             "feedback_history": [],
+            "block_ids": [],
             "log_file": log_file,
         }
         _save(data)

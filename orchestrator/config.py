@@ -55,6 +55,10 @@ class Config:
         return os.environ.get("LINEAR_STATE_FEEDBACK", "").strip() or "Agent Feedback Needed"
 
     @property
+    def state_needs_input(self) -> str:
+        return os.environ.get("LINEAR_STATE_NEEDS_INPUT", "").strip() or "Needs Input"
+
+    @property
     def state_review(self) -> str:
         return (
             os.environ.get("LINEAR_STATE_REVIEW", "").strip()

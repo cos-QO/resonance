@@ -1,18 +1,28 @@
 """
 Planning Agent orchestration.
 
-Two agent types live here:
+Full E2E flow:
 
-PEP Reader Agent — triggered by the 'pep' label:
-  Reads a PEP document (Product Execution Prompt) and decomposes it into
-  Plan issues in Linear. Each Plan contains Blocks and tasks. The agent
-  creates the Plan issues in Todo state (human reviews before approving),
-  posts a summary comment on the PEP issue, then signals pep_decomposed
-  with the plan list including blocking relationships.
+PEP Reader Agent (label: pep)
+  Reads PEP, produces ONE Core Plan issue containing all plans/blocks/tasks.
+  Core Plan → Human Review (for operator sign-off). PEP → Done.
+  Signal: pep_decomposed
 
-Planning Agent — triggered by the 'plan' label:
-  Reads a plan document and decomposes it into execution-ready phase issues,
-  moves them to Plan Approved, then signals plan_decomposed.
+Block Decomposer Agent (label: core-plan)
+  Reads approved Core Plan, creates Block sub-issues (one per block) with full
+  context, task checklists, and acceptance criteria. Sets blocking relations.
+  Blocks → Plan Approved. Core Plan → In Progress.
+  Signal: blocks_created
+
+Block Execution Agent (label: block)
+  Implements all tasks, self-verifies, checks acceptance criteria.
+  Updates issue description task checkboxes as tasks complete.
+  Signals block_complete when all tasks done and verified.
+  Signals human_input_needed when blocked — includes takeover instructions.
+
+Planning Agent (label: plan — legacy)
+  Reads a plan document, decomposes into phase issues → Plan Approved.
+  Signal: plan_decomposed
 """
 import logging
 from pathlib import Path
@@ -22,7 +32,7 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 
-PEP_LABEL = "plan"   # kept for backward compat — classifier routes by task type, not this constant
+PEP_LABEL = "pep"
 PLAN_LABEL = "plan"
 
 
@@ -36,6 +46,449 @@ def is_plan_issue(issue: dict) -> bool:
     return PLAN_LABEL in label_names and "pep" not in label_names
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PEP Reader Agent
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_pep_reader_prompt(issue: dict, config: Config) -> str:
+    """Prompt for the PEP Reader Agent.
+
+    Reads the PEP, creates ONE Core Plan issue containing all plans/blocks/tasks.
+    Core Plan goes to Human Review. PEP is marked Done.
+    Signals pep_decomposed with the Core Plan UUID.
+    """
+    issue_id   = issue.get("identifier", issue["id"])
+    issue_uuid = issue["id"]
+    title      = issue.get("title", "")
+    description = (issue.get("description", "") or "").strip()
+    team_id    = config.linear_team_id
+    project_id = config.linear_project_id or ""
+
+    return f"""\
+# PEP Reader Agent — {issue_id}: {title}
+
+You are the Resonance PEP Reader Agent. Your job is to read this Product Execution
+Prompt (PEP), understand the full scope of work, and produce ONE Core Plan issue
+that captures every plan, block, and task in a structured, executable form.
+
+You are the PM — not an executor. Do not write code. Think like a senior engineering
+lead decomposing a project before handing it to a team.
+
+---
+
+## The PEP
+
+{description if description else "_No description provided — read comments on this issue for context._"}
+
+---
+
+## Step 1 — Read all context
+
+1. Read the PEP description above in full.
+2. Fetch all comments on issue `{issue_id}` using `mcp__linear__linear_search_issues_by_identifier`.
+   Comments contain human clarifications. Incorporate any context found there.
+3. Note any external resources (Figma links, GitHub repos, API docs) — include them
+   in the Core Plan under the relevant blocks.
+
+---
+
+## Step 2 — Design the Plans and Blocks
+
+From the PEP, identify **Plans** (major deliverables, 1–5 per PEP) and within each
+Plan the **Blocks** (atomic units of agent work):
+
+**Plan rules:**
+- 1–5 Plans per PEP
+- Each Plan delivers something independently testable
+- Plans that depend on other Plans must say so explicitly
+
+**Block rules (CRITICAL):**
+- One Block = one agent session = one PR
+- 3–8 hours of focused work, single concern
+- Each Block must have ≥2 measurable acceptance criteria
+- Self-contained: every Block description must include all context an agent needs
+
+**Good Block examples:**
+  ✓ User model + migration (email, password_hash, created_at, soft delete)
+  ✓ POST /auth/login — credential check, JWT response, refresh token
+  ✗ Build the whole authentication system (too large)
+  ✗ Fix button colour (too small)
+
+---
+
+## Step 3 — Create the Core Plan issue in Linear
+
+Call `mcp__linear__linear_create_issue` ONCE with these fields:
+
+| Field | Value |
+|---|---|
+| teamId | `{team_id}` |
+| projectId | `{project_id}` |
+| parentId | `{issue_uuid}` |
+| title | `[{issue_id}] Execution Plan: {title}` |
+| stateId | leave unset (defaults to Todo — orchestrator moves it to Human Review) |
+| labelIds | the id of the `core-plan` label |
+| description | use Core Plan Template below |
+
+Record the returned `id` (UUID) and `identifier` — needed for the signal in Step 6.
+
+### Core Plan Template
+
+```markdown
+## Overview
+[One paragraph: what this delivery achieves and why it matters]
+
+## Execution Map
+
+### Plan 1 — <title>
+**Goal:** [What this plan delivers]
+**Depends on:** none / Plan 2
+
+#### B1 — <block title>
+**What:** [What this block implements]
+**Domain:** frontend | backend | design | full-stack
+**Tasks:**
+- [ ] [Specific implementation task]
+- [ ] [Specific implementation task]
+**Acceptance Criteria:**
+- [ ] [Verifiable, observable condition]
+- [ ] [Verifiable, observable condition]
+**Depends on:** none
+
+#### B2 — <block title>
+**What:** [What this block implements]
+**Domain:** frontend | backend | design | full-stack
+**Tasks:**
+- [ ] [Specific implementation task]
+**Acceptance Criteria:**
+- [ ] [Verifiable, observable condition]
+**Depends on:** B1
+
+### Plan 2 — <title>
+**Goal:** [What this plan delivers]
+**Depends on:** Plan 1
+
+#### B1 — <block title>
+[...]
+
+## Technical Context
+[Codebase patterns, APIs, environment details, stack constraints relevant across all plans.
+Include enough for an agent with only the codebase and this document.]
+
+## Resources
+[Figma links, API docs, GitHub refs, design tokens — all external resources from the PEP]
+
+## Sequencing Rationale
+[Why plans and blocks are ordered this way — what constrains the sequence]
+
+## PEP Reference
+Parent PEP: [{issue_id}] {title}
+```
+
+---
+
+## Step 4 — Write plan summary to local memory
+
+Create `runs/memory/{issue_id}/plan.md`:
+
+```markdown
+# Core Plan Summary — {issue_id}: {title}
+
+## Core Plan Issue
+[identifier]: [title]
+
+## Plans and Blocks
+Plan 1: [title]
+  B1: [title] (independent)
+  B2: [title] (depends on B1)
+Plan 2: [title] (depends on Plan 1)
+  B1: [title]
+
+## Sequencing rationale
+[One sentence explaining the execution order]
+```
+
+---
+
+## Step 5 — Post summary comment on PEP issue
+
+Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`:
+
+```
+📋 Core Plan created — [N] plan(s), [M] block(s) total
+
+Core Plan: [identifier] → [title] (awaiting your review in Human Review)
+
+Plans:
+  Plan 1: [title] — [N] blocks
+  Plan 2: [title] — [N] blocks (depends on Plan 1)
+
+**Next step:** Review the Core Plan issue in Linear. When satisfied, move it
+to **Plan Approved** to start block decomposition. Resonance picks it up automatically.
+```
+
+---
+
+## Step 6 — Signal completion
+
+After the Core Plan issue is created and the comment is posted, output EXACTLY:
+
+`AGENT_SIGNAL: {{"type": "pep_decomposed", "pep_id": "{issue_id}", "core_issue_uuid": "<uuid>", "core_issue_identifier": "<identifier>"}}`
+
+Replace `<uuid>` and `<identifier>` with the values returned by Linear when you created the issue.
+Do not end this session without emitting this signal.
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Block Decomposer Agent (Core Plan → Blocks)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_core_plan_prompt(issue: dict, config: Config) -> str:
+    """Prompt for the Block Decomposer Agent.
+
+    Reads an approved Core Plan, creates Block sub-issues with full context,
+    sets blocking relations, moves blocks to Plan Approved, signals blocks_created.
+    """
+    issue_id    = issue.get("identifier", issue["id"])
+    issue_uuid  = issue["id"]
+    title       = issue.get("title", "")
+    description = (issue.get("description", "") or "").strip()
+    team_id     = config.linear_team_id
+    project_id  = config.linear_project_id or ""
+    eligibility = config.eligibility_state
+
+    return f"""\
+# Block Decomposer Agent — {issue_id}: {title}
+
+You are the Resonance PM. This Core Plan was reviewed and approved by a human.
+Your job is to create Block sub-issues — one per block — so execution agents can
+implement each block independently.
+
+---
+
+## The Core Plan
+
+{description if description else "_No description provided._"}
+
+---
+
+## Step 1 — Read and parse the plan
+
+Read the Core Plan description above. Identify every Block across all Plans.
+Note their titles, tasks, acceptance criteria, domain, and dependencies.
+
+---
+
+## Step 2 — Analyze parallelism
+
+For each pair of blocks, determine if they can run concurrently:
+- Blocks that touch the SAME files, modules, or database tables → SEQUENTIAL (add blocking relation)
+- Blocks that work on INDEPENDENT areas (different components, different endpoints, different tables) → PARALLEL (no blocking relation, both go to Plan Approved)
+
+Document your analysis in a brief table before creating issues.
+
+Only add a blocking relation when there is a genuine data or code dependency.
+Parallelize aggressively — the orchestrator runs multiple agents simultaneously.
+
+---
+
+## Step 3 — Create a sub-issue for each Block
+
+For each Block, call `mcp__linear__linear_create_issue` with:
+
+| Field | Value |
+|---|---|
+| teamId | `{team_id}` |
+| projectId | `{project_id}` |
+| parentId | `{issue_uuid}` |
+| title | `[{issue_id}-B<N>] <Block title>` (global sequence, e.g. B1, B2, B3) |
+| stateId | leave unset (defaults to Todo) |
+| labelIds | `block` label id — optionally also a domain label (frontend/backend/design/bug) |
+| description | use Block Issue Template below |
+
+Record the returned `id` (UUID) and `identifier` for each block.
+
+### Block Issue Template
+
+```markdown
+## Goal
+[What this block implements — one clear paragraph]
+
+## Tasks
+- [ ] [Specific implementation task]
+- [ ] [Specific implementation task]
+- [ ] [Specific implementation task]
+
+## Acceptance Criteria
+- [ ] [Verifiable, observable condition]
+- [ ] [Verifiable, observable condition]
+
+## Technical Context
+[Files to touch, patterns to follow, APIs, commands, environment variables.
+Include everything an agent needs — it only has the codebase and this description.]
+
+## Resources
+[Relevant external links: Figma, API docs, GitHub refs]
+
+## Dependencies
+[Block identifiers that must be Done before this starts, or "None"]
+
+## Parent Plan
+[{issue_id}] {title}
+```
+
+---
+
+## Step 4 — Set blocking relations
+
+For each block that depends on another block, call `mcp__linear__linear_create_issue_relation`:
+- For "B2 depends on B1": relation where B1 blocks B2
+  - The issueId is the BLOCKER (B1), relatedIssueId is the BLOCKED (B2), type "blocks"
+
+---
+
+## Step 5 — Move all blocks to Plan Approved
+
+Call `mcp__linear__linear_bulk_update_issues` with:
+- `ids`: list of all block UUIDs
+- `stateId`: state ID for `{eligibility}`
+
+To get the state ID, call `mcp__linear__linear_search_issues_by_identifier` on
+`{issue_id}` and read the `team.states` — find the state named `{eligibility}`.
+
+---
+
+## Step 6 — Post summary comment on Core Plan
+
+Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`:
+
+```
+📦 [{issue_id}] decomposed — [N] blocks created and queued for execution
+
+Parallel blocks (start simultaneously):
+  [B1-identifier]: [title]
+  [B2-identifier]: [title]
+
+Sequential blocks (wait for dependency):
+  [B3-identifier]: [title] — blocked by B1 (starts when B1 is Done)
+
+Each block will be implemented and self-verified by an agent, then sent to Human Review.
+```
+
+---
+
+## Step 7 — Signal completion
+
+Output EXACTLY:
+
+`AGENT_SIGNAL: {{"type": "blocks_created", "core_plan_id": "{issue_id}", "blocks": [{{"id": "<uuid>", "identifier": "<identifier>", "title": "<title>", "blocked_by_ids": []}}]}}`
+
+- `id`: Linear UUID returned when you created the block issue
+- `identifier`: e.g. "RND-42"
+- `blocked_by_ids`: list of block UUIDs that block this one (empty list if none)
+
+Do not end this session without emitting this signal.
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Block Execution Agent
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_block_execution_prompt(issue: dict, task_cfg: dict) -> str:
+    issue_id    = issue.get("identifier", issue["id"])
+    issue_uuid  = issue["id"]
+    title       = issue.get("title", "")
+    description = (issue.get("description", "") or "").strip()
+
+    return f"""\
+# Block Execution Agent — {issue_id}: {title}
+
+You are a Resonance execution agent. Implement this block completely, verify your
+own work, then signal done. One block = one PR.
+
+## Block Specification
+
+{description if description else "_No description provided._"}
+
+---
+
+## Execution Protocol
+
+### Step 1 — Read the spec
+Read every task and acceptance criterion before writing any code.
+
+### Step 2 — Implement task by task
+
+For each task in the **Tasks** section:
+
+1. Implement the task (code, tests, config).
+2. Commit with a focused message.
+3. Update the issue description to check off the task:
+   - Fetch current description via `mcp__linear__linear_search_issues_by_identifier` with identifier `{issue_id}`
+   - Replace `- [ ] <task text>` with `- [x] <task text>` in the description
+   - Update via `mcp__linear__linear_bulk_update_issues` with `ids: ["{issue_uuid}"]` and the updated description
+4. Post a brief comment via `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`:
+   ```
+   ✅ Task done: <task name>
+   <What you did — 1-2 sentences. Key decisions or findings only.>
+   ```
+
+### Step 3 — Self-verify
+
+After all tasks are implemented:
+- Run the test suite or relevant checks (build, lint, type-check)
+- Verify every acceptance criterion by observable output
+- If a criterion fails, fix it before signalling complete
+
+### Step 4 — Signal complete
+
+When ALL tasks are checked off and ALL acceptance criteria are met:
+
+`AGENT_SIGNAL: {{"type": "block_complete", "summary": "<one sentence: what was built and verified>"}}`
+
+---
+
+## Blocker Protocol
+
+If you hit a blocker you cannot resolve (missing credentials, architectural decision
+needed, conflicting requirements, external dependency unavailable):
+
+1. Post a comment via `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"`:
+   ```
+   ⚠️ Blocked: <{issue_id}>
+
+   **Blocker:** <what is blocking you — be specific>
+
+   **Recommendations:**
+   - Option A: <approach + tradeoff>
+   - Option B: <approach + tradeoff>
+
+   **To take control via Claude Code:**
+   ```
+   resonance attach {issue_id}
+   resonance feedback {issue_id} "your instructions here"
+   ```
+   Worktree has all current changes committed. Branch: agent/{issue_id}
+   ```
+
+2. Signal:
+   `AGENT_SIGNAL: {{"type": "human_input_needed", "question": "<specific question that needs answering>", "context": "<blocker details>"}}`
+
+---
+
+## Rules
+- Never signal block_complete unless every task checkbox is checked and every criterion verified
+- Keep commits atomic — one logical change per commit
+- Post a "Starting block {issue_id}" comment as your very first action
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Legacy Planning Agent (plan label)
+# ─────────────────────────────────────────────────────────────────────────────
+
 def build_planning_prompt(issue: dict, config: Config) -> str:
     issue_id  = issue.get("identifier", issue["id"])
     title     = issue.get("title", "")
@@ -45,11 +498,10 @@ def build_planning_prompt(issue: dict, config: Config) -> str:
     team_id     = config.linear_team_id
     project_id  = config.linear_project_id or ""
 
-    # Build label reference table from WORKFLOW.md
     task_types = config.workflow.get("task_types", {})
     label_rows: list[str] = []
     for tt_name, tt_cfg in task_types.items():
-        if tt_name == "plan":
+        if tt_name in ("plan", "pep", "core_plan", "block"):
             continue
         detection = tt_cfg.get("detection", {})
         requires  = detection.get("labels", [])
@@ -61,7 +513,6 @@ def build_planning_prompt(issue: dict, config: Config) -> str:
         row += f"  skills={skills[:3]}"
         label_rows.append(row)
 
-    # QO skills always injected
     qo_skills_note = (
         "Always include these QO skills in every phase issue's skills section:\n"
         "  connectui-dev (design system), verify (quality gates), qo-pr (PR creation)"
@@ -102,7 +553,7 @@ Call it once per phase with exactly these fields:
 | labelIds | one label id from Available Labels |
 | description | see PEP Template below |
 
-After each call, record the returned `id` (UUID) and `identifier` (e.g. RND-25) — you need them for Steps 5 and 6.
+After each call, record the returned `id` (UUID) and `identifier` (e.g. RND-25).
 
 **Step 4 — Write plan.md to local memory.**
 Create the file `runs/memory/{issue_id}/plan.md` with a structured summary:
@@ -129,9 +580,7 @@ For each phase issue UUID from Step 3, call `mcp__linear__linear_bulk_update_iss
 - `stateId`: the state ID for `{eligibility}`
 
 To get the state ID for `{eligibility}`, first call `mcp__linear__linear_search_issues_by_identifier`
-on the parent issue `{issue_id}` and read the `team.states` from the result, or look up via any issue
-in the same team. The state named `{eligibility}` is what you need.
-This kicks off orchestration automatically.
+on the parent issue `{issue_id}` and read the `team.states` from the result.
 
 ## Available Labels
 
@@ -173,253 +622,6 @@ After all phase issues are created and moved to Plan Approved, output EXACTLY:
 
 `AGENT_SIGNAL: {{"type": "plan_decomposed", "plan_id": "{issue_id}", "phases": [{{"id": "<linear-uuid>", "identifier": "<identifier>", "title": "<title>"}}]}}`
 
-Replace the placeholders with the actual values returned by Linear when you created each issue.
+Replace the placeholders with the actual values returned by Linear.
 Do not end this session without emitting this signal.
-"""
-
-
-def build_pep_reader_prompt(issue: dict, config: Config) -> str:
-    """Prompt for the PEP Reader Agent.
-
-    The agent reads the PEP issue description + comments, creates Plan issues in
-    Linear (Todo state, for human review), posts a summary comment, then signals
-    pep_decomposed with plan IDs and blocking relationships so the orchestrator
-    can set Linear relations.
-    """
-    issue_id    = issue.get("identifier", issue["id"])
-    issue_uuid  = issue["id"]
-    title       = issue.get("title", "")
-    description = (issue.get("description", "") or "").strip()
-    team_id     = config.linear_team_id
-    project_id  = config.linear_project_id or ""
-
-    # Build label reference from WORKFLOW.md so the agent assigns correct labels
-    task_types = config.workflow.get("task_types", {})
-    label_rows: list[str] = []
-    for tt_name, tt_cfg in task_types.items():
-        if tt_name in ("pep", "plan"):
-            continue
-        detection = tt_cfg.get("detection", {})
-        requires  = detection.get("labels", [])
-        excludes  = detection.get("excludes", [])
-        row = f"  {tt_name:<22} requires={requires}"
-        if excludes:
-            row += f"  excludes={excludes}"
-        label_rows.append(row)
-
-    return f"""\
-# PEP Reader Agent — {issue_id}: {title}
-
-You are the Resonance PEP Reader Agent. Your job is to read this Product Execution
-Prompt (PEP), understand the full scope of work, and create a structured set of
-Plan issues in Linear that Resonance agents can execute one by one.
-
-You are the PM — not an executor. Do not write code. Think like a senior engineering
-lead decomposing a project before handing it to a team.
-
----
-
-## The PEP
-
-{description if description else "_No description provided — read comments on this issue for context._"}
-
----
-
-## Step 1 — Read all context
-
-1. Read the PEP description above in full.
-2. Fetch all comments on issue `{issue_id}` using `mcp__linear__linear_search_issues_by_identifier`.
-   Comments contain human clarifications added after the initial PEP was written.
-   Incorporate any context found there into your planning.
-3. If the PEP references external resources (Figma links, GitHub repos, API docs),
-   note them — you will include them in relevant Plan issue descriptions.
-
----
-
-## Step 2 — Understand the goal and identify Plans
-
-Read the PEP's `## Plans` section. Each Plan entry describes a cohesive deliverable.
-
-If the PEP has no `## Plans` section, infer Plans from the structure:
-- Each major Tier or Phase in the PEP = one Plan
-- If the work is small enough, one Plan with multiple Blocks is correct
-
-**Plan rules:**
-- 1–5 Plans per PEP (more = the PEP should be split into separate PEPs)
-- Each Plan delivers something testable and reviewable on its own
-- Plans that depend on other Plans must say so explicitly
-- Plans with no dependencies can run in parallel
-
----
-
-## Step 3 — Design the Blocks inside each Plan
-
-For each Plan, identify its Blocks:
-
-**Block rules (CRITICAL):**
-- One Block = one agent session = one PR
-- 3–8 hours of focused work
-- Single concern: one endpoint, one component, one migration — not "build the API"
-- Each Block must have ≥2 measurable acceptance criteria
-- Blocks within a Plan can be sequential (B2 needs B1) or parallel (no dependency)
-- Self-contained: every Block description must include all context an agent needs
-
-**Good Block examples:**
-  ✓ User model + migration (email, password_hash, created_at, soft delete)
-  ✓ POST /auth/login — credential check, JWT response, refresh token
-  ✗ Build the whole authentication system (too large)
-  ✗ Fix button colour (too small)
-
----
-
-## Step 4 — Create Plan issues in Linear
-
-For each Plan, call `mcp__linear__linear_create_issue` once with these exact fields:
-
-| Field | Value |
-|---|---|
-| teamId | `{team_id}` |
-| projectId | `{project_id}` |
-| parentId | `{issue_uuid}` |
-| title | `[{issue_id}-P<N>] <Plan title>` (e.g. `[{issue_id}-P1] Auth Backend API`) |
-| stateId | leave unset — defaults to Todo (humans review before approving) |
-| labelIds | one label from Available Labels below |
-| description | use the Plan Issue Template below |
-
-Record the returned `id` (UUID) and `identifier` (e.g. RND-30) for each plan — needed for Steps 5 and 6.
-
-### Naming convention
-
-```
-PEP issue:   {issue_id}         (this issue)
-Plan 1:      [{issue_id}-P1] Title
-Plan 2:      [{issue_id}-P2] Title
-Block 1/P1:  [{issue_id}-P1-B1] Title  ← created later by the Execution Agent
-Block 2/P1:  [{issue_id}-P1-B2] Title
-```
-
-Agents use these prefixes to understand hierarchy at a glance. Always include them.
-
-### Plan Issue Template
-
-```markdown
-## Goal
-[One clear paragraph: what this plan delivers and why it matters]
-
-## Blocks
-
-### B1 — <block title>
-**What:** [What this block implements]
-**Label:** [frontend | backend | design | bug]
-**Tasks:**
-- [ ] [Specific implementation task]
-- [ ] [Specific implementation task]
-**Acceptance criteria:**
-- [ ] [Verifiable, observable condition]
-- [ ] [Verifiable, observable condition]
-**Depends on:** none
-
-### B2 — <block title>
-**What:** [What this block implements]
-**Label:** [frontend | backend | design | bug]
-**Tasks:**
-- [ ] [Specific implementation task]
-**Acceptance criteria:**
-- [ ] [Verifiable, observable condition]
-**Depends on:** B1
-
-[Add more blocks as needed]
-
-## Technical context
-[Relevant patterns, files to touch, APIs, environment details — sourced from the PEP.
-Include enough for an agent with only the codebase and this description.]
-
-## Resources
-[Filtered list of PEP resources relevant to this specific plan — Figma links, docs, GitHub refs]
-
-## Dependencies
-[Identifiers of Plan issues that must be Done before this plan starts, or "None".
-Example: Blocked by: {issue_id}-P1 (needs API endpoints before frontend can connect)]
-
-## PEP Reference
-Parent PEP: [{issue_id}] {title}
-```
-
----
-
-## Step 5 — Write plan summary to local memory
-
-Create the file `runs/memory/{issue_id}/plan.md` with:
-
-```markdown
-# Plan Summary — {issue_id}: {title}
-
-## Plans created
-
-| Identifier | Title | Depends on |
-|---|---|---|
-| [returned identifier] | [title] | none / [other identifier] |
-
-## Sequencing rationale
-[Why plans are ordered this way — what constrains the sequence]
-```
-
----
-
-## Step 6 — Post summary comment on PEP issue
-
-Call `mcp__linear__linear_create_comment` with `issueId: "{issue_uuid}"` and this body:
-
-```
-📋 PEP decomposed — [N] plan(s) created
-
-[identifier]: [Plan title]  →  Todo (awaiting your review)
-[identifier]: [Plan title]  →  Todo (awaiting your review, blocked by [identifier])
-
-**Sequencing:** [one sentence on execution order and why]
-
-**Next step:** Review each Plan issue in Linear. When satisfied, move it to **Plan Approved** to start execution. Resonance picks up Plan Approved issues automatically.
-
-Blocked plans will start automatically once their dependencies are Done — no manual action needed.
-```
-
----
-
-## Step 7 — Signal completion
-
-After all Plan issues are created and the summary comment is posted, output EXACTLY:
-
-`AGENT_SIGNAL: {{"type": "pep_decomposed", "pep_id": "{issue_id}", "plans": [{{"id": "<uuid>", "identifier": "<identifier>", "title": "<title>", "blocked_by_ids": ["<uuid-of-blocker>"]}}]}}`
-
-- `id`: the Linear UUID returned when you created the Plan issue
-- `identifier`: the Linear identifier (e.g. "RND-30")
-- `title`: the full title including the [{issue_id}-P<N>] prefix
-- `blocked_by_ids`: list of UUIDs of Plan issues that block this one (empty list if none)
-
-The orchestrator uses this signal to set blocking relations between Plan issues in Linear.
-Do not end this session without emitting this signal.
-
----
-
-## Available Labels
-
-{chr(10).join(label_rows)}
-
-Use these to label each Plan issue. Use the primary domain of the Plan.
-If a plan spans multiple domains, use the dominant one.
-
----
-
-## [PM] Self-commentary
-
-After creating each Plan issue, post a `[PM]` comment on it:
-
-```
-[PM] Created from PEP {issue_id}: {title}
-Plan {issue_id}-P<N> of <total>.
-Blocks: B1 → B2 → ... (sequential) or B1 ∥ B2 (parallel).
-Rationale: [one sentence on why this plan is scoped this way]
-```
-
-This comment persists between agent sessions and helps future iterations understand intent.
 """

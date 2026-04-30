@@ -16,7 +16,14 @@ from .classifier import classify
 from .config import Config
 from .events import write as write_event
 from .linear_client import LinearClient
-from .planner import build_pep_reader_prompt, build_planning_prompt, is_pep_issue, is_plan_issue
+from .planner import (
+    build_pep_reader_prompt,
+    build_planning_prompt,
+    build_core_plan_prompt,
+    build_block_execution_prompt,
+    is_pep_issue,
+    is_plan_issue,
+)
 from .runner import Runner, RunResult, build_prompt, make_log_path
 from .workspace import WorkspaceManager
 from . import memory as issue_memory
@@ -199,8 +206,15 @@ class Poller:
         )
 
         # Build prompt — route by task type
+        run = run_state.get_run(issue_id)
+        phase = run.get("phase", "execution") if run else "execution"
+
         if task_type == "pep":
             prompt = build_pep_reader_prompt(issue, self._config)
+        elif task_type == "core_plan":
+            prompt = build_core_plan_prompt(issue, self._config)
+        elif task_type == "block":
+            prompt = build_block_execution_prompt(issue, task_cfg)
         elif task_type == "plan":
             prompt = build_planning_prompt(issue, self._config)
         else:
@@ -219,26 +233,28 @@ class Poller:
         except Exception:
             logger.warning("could not add RES label to issue=%s (continuing)", issue_id)
 
-        # Post start comment for pep/plan issues
-        if task_type == "pep":
+        # Post start comment per task type
+        start_comments = {
+            "pep": (
+                "▶️ PEP Reader Agent started — analysing PEP and creating the Core Plan.\n\n"
+                "I'll create one Core Plan issue with all plans, blocks, and tasks, "
+                "then move it to **Human Review** for your approval."
+            ),
+            "core_plan": (
+                "▶️ Block Decomposer Agent started — creating Block sub-issues from the approved plan.\n\n"
+                "I'll post a summary here when all blocks are created and queued for execution."
+            ),
+            "plan": (
+                "▶️ Planning Agent started — analysing plan and creating phase issues.\n\n"
+                "I'll post a summary comment here when all phases are ready."
+            ),
+        }
+        comment = start_comments.get(task_type)
+        if comment:
             try:
-                self._linear.post_comment(
-                    issue["id"],
-                    f"▶️ PEP Reader Agent started — analysing PEP and creating Plan issues.\n\n"
-                    f"Plan issues will appear in **Todo** for your review. "
-                    f"I'll post a summary here when all plans are ready.",
-                )
+                self._linear.post_comment(issue["id"], comment)
             except Exception:
-                logger.warning("failed to post pep start comment issue=%s", issue_id)
-        elif task_type == "plan":
-            try:
-                self._linear.post_comment(
-                    issue["id"],
-                    f"▶️ Planning Agent started — analysing plan and creating phase issues.\n\n"
-                    f"I'll post a summary comment here when all phases are ready.",
-                )
-            except Exception:
-                logger.warning("failed to post plan start comment issue=%s", issue_id)
+                logger.warning("failed to post start comment issue=%s task_type=%s", issue_id, task_type)
 
         # Launch
         runner = Runner(self._config, issue_id, worktree, prompt, log_file)
@@ -262,17 +278,27 @@ class Poller:
 
         signal = result.signal
 
-        # PEP Reader Agent completed decomposition
+        # PEP Reader Agent completed — Core Plan created
         if signal and signal.get("type") == "pep_decomposed":
             self._finish_pep_decomposed(issue_id, issue, signal)
             return
 
-        # Planning Agent completed decomposition
+        # Block Decomposer Agent completed — Block sub-issues created
+        if signal and signal.get("type") == "blocks_created":
+            self._finish_blocks_created(issue_id, issue, signal)
+            return
+
+        # Block Execution Agent completed and self-verified
+        if signal and signal.get("type") == "block_complete":
+            self._finish_block_done(issue_id, issue, result)
+            return
+
+        # Legacy Planning Agent completed
         if signal and signal.get("type") == "plan_decomposed":
             self._finish_plan_decomposed(issue_id, issue, signal)
             return
 
-        # Agent signalled ready for review
+        # QA Agent (or execution agent) ready for human review
         if signal and signal.get("type") == "ready_for_review":
             self._finish_success(issue_id, issue, result)
             return
@@ -284,17 +310,10 @@ class Poller:
             if issue:
                 try:
                     self._linear.set_issue_state(
-                        issue["id"], issue["team"]["id"], self._config.state_feedback
-                    )
-                    self._linear.post_comment(
-                        issue["id"],
-                        f"⏸ Agent paused — needs your input:\n\n"
-                        f"{signal.get('question', '')}\n\n"
-                        f"**To continue:** add a comment with your answer or instructions, "
-                        f"then move this issue to **Agent Feedback Needed**.",
+                        issue["id"], issue["team"]["id"], self._config.state_needs_input
                     )
                 except Exception:
-                    logger.exception("failed to update Linear for human_input_needed issue=%s", issue_id)
+                    logger.exception("failed to set Needs Input state issue=%s", issue_id)
             return
 
         # Worker exited without a signal
@@ -444,8 +463,14 @@ class Poller:
         run_state.update_run(issue_id, log_file=log_file)
         issue_memory.update_context(issue_id, status="running", iteration=next_iter)
 
-        # Plan issues always get the planning prompt — even on retry
-        if task_type == "plan":
+        # Route prompt by task type
+        if task_type == "pep":
+            prompt = build_pep_reader_prompt(issue_data, self._config)
+        elif task_type == "core_plan":
+            prompt = build_core_plan_prompt(issue_data, self._config)
+        elif task_type == "block":
+            prompt = build_block_execution_prompt(issue_data, task_cfg)
+        elif task_type == "plan":
             prompt = build_planning_prompt(issue_data, self._config)
         else:
             prompt = build_prompt(
@@ -500,6 +525,11 @@ class Poller:
                 existing.append(text)
                 run_state.update_run(issue_id, feedback_history=existing)
 
+            # Reset block phase to execution when human provides feedback
+            if run.get("task_type") == "block":
+                run_state.update_run(issue_id, phase="execution")
+                logger.info("block phase reset to execution after human feedback issue=%s", issue_id)
+
             write_event(issue_id, "human_feedback_received", comments=len(new_feedback))
             logger.info("resuming after human review issue=%s new_comments=%d", issue_id, len(new_feedback))
 
@@ -533,7 +563,7 @@ class Poller:
         )
         return new_texts
 
-    # ── PEP decomposition ─────────────────────────────────────────────────────
+    # ── PEP → Core Plan ───────────────────────────────────────────────────────
 
     def _finish_pep_decomposed(
         self,
@@ -541,56 +571,107 @@ class Poller:
         issue: Optional[dict],
         signal: dict,
     ) -> None:
-        """PEP decomposition complete.
+        """PEP Reader Agent complete.
 
-        1. Persists plan metadata to local memory.
-        2. Sets Linear blocking relations between plan issues (based on signal data).
-        3. Marks PEP issue Done.
-        4. Updates local run state to complete.
+        Moves the Core Plan issue to Human Review and marks the PEP Done.
         """
-        plans = signal.get("plans", [])
+        core_uuid       = signal.get("core_issue_uuid", "")
+        core_identifier = signal.get("core_issue_identifier", "")
+
         run_state.update_run(issue_id, status="complete")
-        issue_memory.update_context(issue_id, status="complete", plans_count=len(plans))
+        issue_memory.update_context(issue_id, status="complete", core_issue=core_identifier)
 
-        if plans:
-            issue_memory.write_plans(issue_id, plans)
-
-        # Build a UUID → plan dict map for relation wiring
-        uuid_to_plan = {p["id"]: p for p in plans}
-
-        for plan in plans:
-            blocked_by_ids = plan.get("blocked_by_ids", [])
-            for blocker_uuid in blocked_by_ids:
-                if blocker_uuid not in uuid_to_plan:
-                    continue
-                # blocker_uuid blocks plan["id"]
-                try:
-                    self._linear.create_issue_relation(
-                        issue_id=blocker_uuid,
-                        related_issue_id=plan["id"],
-                        relation_type="blocks",
+        # Move Core Plan → Human Review
+        if core_uuid:
+            try:
+                core_issue = self._linear.get_issue(core_uuid)
+                if core_issue:
+                    self._linear.set_issue_state(
+                        core_uuid, core_issue["team"]["id"], self._config.state_review
                     )
-                    blocker_id = uuid_to_plan[blocker_uuid].get("identifier", blocker_uuid[:8])
-                    logger.info(
-                        "relation set: %s blocks %s",
-                        blocker_id,
-                        plan.get("identifier", plan["id"][:8]),
-                    )
-                except Exception:
-                    logger.warning(
-                        "could not set blocking relation %s→%s",
-                        blocker_uuid[:8],
-                        plan["id"][:8],
-                    )
+                    logger.info("core plan moved to Human Review core=%s", core_identifier)
+            except Exception:
+                logger.warning("could not move core plan to Human Review core=%s", core_identifier)
 
+        # Mark PEP Done
         if issue:
             try:
                 self._linear.set_issue_state(issue["id"], issue["team"]["id"], "Done")
             except Exception:
-                logger.warning("could not mark PEP issue Done issue=%s", issue_id)
+                logger.warning("could not mark PEP Done issue=%s", issue_id)
 
-        write_event(issue_id, "pep_decomposed", plans=len(plans))
-        logger.info("pep decomposed issue=%s plans=%d", issue_id, len(plans))
+        write_event(issue_id, "pep_decomposed", core_issue=core_identifier)
+        logger.info("pep decomposed issue=%s core_issue=%s", issue_id, core_identifier)
+
+    # ── Core Plan → Blocks ────────────────────────────────────────────────────
+
+    def _finish_blocks_created(
+        self,
+        issue_id: str,
+        issue: Optional[dict],
+        signal: dict,
+    ) -> None:
+        blocks = signal.get("blocks", [])
+        block_ids = [b.get("identifier", "") for b in blocks if b.get("identifier")]
+
+        run_state.update_run(issue_id, status="monitoring", block_ids=block_ids)
+        issue_memory.update_context(issue_id, status="monitoring", blocks_count=len(blocks))
+
+        if blocks:
+            issue_memory.write_phases(issue_id, blocks)
+
+        uuid_to_block = {b["id"]: b for b in blocks}
+        for block in blocks:
+            for blocker_uuid in block.get("blocked_by_ids", []):
+                if blocker_uuid not in uuid_to_block:
+                    continue
+                try:
+                    self._linear.create_issue_relation(
+                        issue_id=blocker_uuid,
+                        related_issue_id=block["id"],
+                        relation_type="blocks",
+                    )
+                except Exception:
+                    logger.warning("could not set blocking relation %s→%s", blocker_uuid[:8], block["id"][:8])
+
+        if issue:
+            try:
+                self._linear.set_issue_state(
+                    issue["id"], issue["team"]["id"], self._config.state_in_progress
+                )
+            except Exception:
+                logger.warning("could not set core plan In Progress issue=%s", issue_id)
+
+        write_event(issue_id, "blocks_created", blocks=len(blocks))
+        logger.info("blocks created issue=%s blocks=%d", issue_id, len(blocks))
+
+    # ── Block complete (self-verified) ────────────────────────────────────────
+
+    def _finish_block_done(self, issue_id: str, issue: Optional[dict], result: RunResult) -> None:
+        """Block execution complete and self-verified. Mark block Done."""
+        summary = (result.signal or {}).get("summary", "")
+
+        run_state.update_run(issue_id, status="complete", artifacts=result.artifacts)
+        issue_memory.update_context(issue_id, status="complete")
+
+        if issue:
+            try:
+                self._linear.mark_all_tasks_done(issue["id"])
+            except Exception:
+                logger.warning("could not update description tasks issue=%s", issue_id)
+
+            try:
+                self._linear.set_issue_state(issue["id"], issue["team"]["id"], "Done")
+                lines = ["✅ Block complete and verified.", ""]
+                if summary:
+                    lines += [summary, ""]
+                lines.append("_This block is Done. The parent plan will move to Human Review when all blocks are complete._")
+                self._linear.post_comment(issue["id"], "\n".join(lines))
+            except Exception:
+                logger.exception("failed to mark block Done issue=%s", issue_id)
+
+        write_event(issue_id, "block_done")
+        logger.info("block done issue=%s", issue_id)
 
     # ── Dependency management ─────────────────────────────────────────────────
 
@@ -730,10 +811,86 @@ class Poller:
         except Exception:
             logger.exception("failed to write RESONANCE.md issue=%s", issue_id)
 
+    # ── Plan completion monitoring ────────────────────────────────────────────
+
+    def _check_plan_completions(self) -> None:
+        """For core_plan runs in 'monitoring' status, check if all blocks are Done.
+        If so, move the plan issue to Human Review with a handoff comment.
+        """
+        all_runs = run_state.get_active_runs()
+        monitoring = {
+            iid: run for iid, run in all_runs.items()
+            if run.get("status") == "monitoring" and run.get("task_type") == "core_plan"
+        }
+
+        for issue_id, run in monitoring.items():
+            linear_uuid = run.get("linear_uuid", "")
+            if not linear_uuid:
+                continue
+
+            try:
+                issue = self._linear.get_issue(linear_uuid)
+            except Exception:
+                continue
+            if not issue:
+                continue
+
+            if issue["state"]["name"] != self._config.state_in_progress:
+                continue
+
+            try:
+                children = self._linear.get_issue_children(linear_uuid)
+            except Exception:
+                logger.warning("could not fetch children for plan issue=%s", issue_id)
+                continue
+
+            block_children = [
+                c for c in children
+                if any(lbl["name"].lower() == "block" for lbl in c.get("labels", {}).get("nodes", []))
+            ]
+
+            if not block_children:
+                continue
+
+            all_done = all(c["state"]["name"] in {"Done"} for c in block_children)
+            if not all_done:
+                pending = [c["identifier"] for c in block_children if c["state"]["name"] not in {"Done", "Cancelled"}]
+                logger.debug("plan=%s waiting on blocks: %s", issue_id, pending)
+                continue
+
+            logger.info("all blocks done for plan=%s — moving to Human Review", issue_id)
+            run_state.update_run(issue_id, status="complete")
+
+            try:
+                self._linear.set_issue_state(
+                    issue["id"], issue["team"]["id"], self._config.state_review
+                )
+                block_lines = "\n".join(
+                    f"  - {c['identifier']}: {c['title']}" for c in block_children
+                )
+                worktree_cmds = "\n".join(
+                    f"  resonance attach {c['identifier']}" for c in block_children
+                )
+                comment = (
+                    f"✅ **All blocks complete — ready for your review.**\n\n"
+                    f"**Blocks delivered:**\n{block_lines}\n\n"
+                    f"**To review or take control of any block:**\n"
+                    f"```\n{worktree_cmds}\n```\n\n"
+                    f"Each block has a branch `agent/<identifier>` with committed changes. "
+                    f"Open PRs from those branches for code review.\n\n"
+                    f"_To approve: move to **Done**. To request changes: add a comment and move to **Agent Feedback Needed**._"
+                )
+                self._linear.post_comment(issue["id"], comment)
+            except Exception:
+                logger.exception("failed to move plan to Human Review issue=%s", issue_id)
+
+            write_event(issue_id, "plan_complete_human_review")
+
     # ── Reconciliation ─────────────────────────────────────────────────────────
 
     def _reconcile(self) -> None:
         """Check that active local runs still correspond to eligible Linear state."""
+        self._check_plan_completions()
         active = run_state.get_active_runs()
         for issue_id, run in active.items():
             linear_uuid = run.get("linear_uuid", "")

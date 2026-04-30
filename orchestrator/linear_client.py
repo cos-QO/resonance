@@ -30,6 +30,13 @@ STATES_TO_CREATE = [
         "description": "set when agent needs human input",
     },
     {
+        "role": "needs_input",
+        "default": "Needs Input",
+        "color": "#FF5722",
+        "type": "started",
+        "description": "agent blocked — awaiting human decision or approval",
+    },
+    {
         "role": "review",
         "default": "Human Review",
         "color": "#9C27B0",
@@ -46,13 +53,15 @@ STATES_STANDARD = [
 
 # Required issue labels — created by resonance setup if missing
 REQUIRED_LABELS = [
-    {"name": "RES",      "color": "#FF6B35"},  # Resonance-managed marker
-    {"name": "pep",      "color": "#7C3AED"},  # Product Execution Prompt — triggers PEP Reader Agent
-    {"name": "plan",     "color": "#7C4DFF"},
-    {"name": "design",   "color": "#F06292"},
-    {"name": "frontend", "color": "#4FC3F7"},
-    {"name": "backend",  "color": "#26A69A"},
-    {"name": "bug",      "color": "#EF5350"},
+    {"name": "RES",       "color": "#FF6B35"},  # Resonance-managed marker
+    {"name": "pep",       "color": "#7C3AED"},  # Product Execution Prompt — triggers PEP Reader Agent
+    {"name": "core-plan", "color": "#2196F3"},  # Core Plan (produced by PEP Reader, human-reviewed)
+    {"name": "block",     "color": "#FF5722"},  # Execution block unit (produced by Block Decomposer)
+    {"name": "plan",      "color": "#7C4DFF"},  # Legacy plan label
+    {"name": "design",    "color": "#F06292"},
+    {"name": "frontend",  "color": "#4FC3F7"},
+    {"name": "backend",   "color": "#26A69A"},
+    {"name": "bug",       "color": "#EF5350"},
 ]
 
 
@@ -641,6 +650,43 @@ class LinearClient:
             {"issueId": issue_id, "relatedIssueId": related_issue_id, "type": relation_type},
         )
         logger.debug("relation created %s blocks %s", issue_id, related_issue_id)
+
+    def get_issue_children(self, issue_id: str) -> list[dict]:
+        """Return child issues of the given issue."""
+        data = self._query(
+            """
+            query IssueChildren($id: String!) {
+              issue(id: $id) {
+                children(first: 50) {
+                  nodes {
+                    id
+                    identifier
+                    title
+                    state { name }
+                    labels { nodes { name } }
+                  }
+                }
+              }
+            }
+            """,
+            {"id": issue_id},
+        )
+        issue = data.get("issue")
+        if not issue:
+            return []
+        return issue.get("children", {}).get("nodes", [])
+
+    def mark_all_tasks_done(self, issue_id: str) -> None:
+        """Replace all unchecked task boxes in the issue description with checked ones."""
+        import re
+        issue = self.get_issue(issue_id)
+        if not issue:
+            return
+        description = issue.get("description", "") or ""
+        updated = re.sub(r"- \[ \]", "- [x]", description)
+        if updated != description:
+            self.update_issue(issue_id, description=updated)
+            logger.debug("marked all tasks done issue=%s", issue_id)
 
     def close(self) -> None:
         self._client.close()

@@ -29,6 +29,7 @@ linear:
     - Plan Approved           # human approved — orchestrator picks up from here
     - In Progress             # orchestrator has claimed and started this issue
     - Agent Feedback Needed   # agent paused, waiting for human input or approval
+    - Needs Input              # agent blocked, awaiting human decision
     - Human Review            # human approved the output — PR is open
     - Done                    # human-verified complete
     - Cancelled               # abandoned, workspace cleaned up
@@ -74,11 +75,9 @@ plan_approval:
 task_types:
 
   # ── pep ──────────────────────────────────────────────────────────────────────
-  # A Product Execution Prompt (PEP) document describing the full scope of a
-  # project or feature. The PEP Reader Agent reads it, creates Plan issues (in
-  # Todo for human review), sets blocking relations between plans, and posts a
-  # summary comment. Checked before 'plan' so a pep-labeled issue never falls
-  # through to the Planning Agent.
+  # A Product Execution Prompt (PEP) document. When approved, the PEP Reader
+  # Agent reads it and produces ONE Core Plan issue containing all plans, blocks,
+  # and tasks. The Core Plan goes to Human Review. PEP issue is then marked Done.
   pep:
     detection:
       labels: [pep]
@@ -87,15 +86,48 @@ task_types:
       - linear                 # creates issues, posts comments, reads project
     description: |
       Reads a PEP document from a Linear issue.
-      Creates Plan issues ([PEP-ID-P1], [PEP-ID-P2], ...) as children of the PEP issue.
-      Each Plan issue contains Blocks with tasks, acceptance criteria, and context.
-      Sets blocking relations between dependent plans.
+      Creates ONE Core Plan issue (label: core-plan) as a child of the PEP issue.
+      The Core Plan contains all plans, blocks, tasks, and dependencies.
+      Moves Core Plan to Human Review for operator sign-off.
       Posts summary comment. Marks PEP issue Done.
 
+  # ── core_plan ────────────────────────────────────────────────────────────────
+  # A Core Plan issue (produced by PEP Reader) reviewed and approved by a human.
+  # The Block Decomposer Agent reads it and creates Block sub-issues — one per
+  # block — with full context, task checklists, and acceptance criteria.
+  core_plan:
+    detection:
+      labels: [core-plan]
+    worker: claude-opus        # PM-level reasoning for block decomposition
+    mcp:
+      - linear
+    description: |
+      Reads an approved Core Plan and decomposes it into Block sub-issues.
+      Each Block is a child issue with tasks, acceptance criteria, and context.
+      Sets blocking relations between dependent blocks.
+      Moves blocks to Plan Approved. Posts summary comment.
+      Core Plan moves to In Progress while blocks execute.
+
+  # ── block ────────────────────────────────────────────────────────────────────
+  # A single execution block — one agent session, one PR, 3-8 hours of work.
+  # Agent implements all tasks, updates description checkboxes, self-verifies,
+  # then signals block_complete → Done. Blocked → Needs Input (human decides).
+  # When all sibling blocks are Done → parent plan → Human Review.
+  block:
+    detection:
+      labels: [block]
+    worker: claude-sonnet
+    mcp:
+      - linear
+    description: |
+      Implements one self-contained block. Updates description task checkboxes
+      as each task completes. Self-verifies against acceptance criteria.
+      block_complete → Done. Blocked → Needs Input with takeover instructions.
+      When all blocks Done → plan moves to Human Review automatically.
+
   # ── plan ─────────────────────────────────────────────────────────────────────
-  # A plan document describing phases, steps, and goals.
-  # The Planning Agent reads it, decomposes into phase issues, and kicks off.
-  # Human creates this in Todo (or via pd-pep skill), then moves to Plan Approved.
+  # Legacy: a plan document describing phases. Kept for backward compatibility.
+  # Human creates this in Todo, then moves to Plan Approved.
   plan:
     detection:
       labels: [plan]
@@ -247,6 +279,9 @@ unsupported:
     is not supported in the current configuration.
 
     Supported task types and required labels:
+      pep               → label: pep  (Product Execution Prompt)
+      core_plan         → label: core-plan  (created by PEP Reader, human-reviewed)
+      block             → label: block  (created by Block Decomposer)
       design_to_code    → label: design
       frontend_feature  → label: frontend (without bug)
       frontend_bug      → labels: bug + frontend
@@ -373,6 +408,9 @@ handoff:
 
   # If issue becomes ineligible mid-run → stop cleanly, return to last stable state.
   ineligible: Todo
+
+  # Agent blocked on a decision or missing input → orchestrator moves issue here.
+  blocked: Needs Input
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RETRY POLICY

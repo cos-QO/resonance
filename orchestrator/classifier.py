@@ -23,7 +23,21 @@ def classify(issue: dict, config: Config) -> tuple[str, dict]:
         if pep_requires.issubset(label_names):
             return "pep", {**pep_cfg, "_name": "pep"}
 
-    # Plan issues route to the Planning Agent
+    # Core Plan issues route to the Block Decomposer Agent
+    core_plan_cfg = config.workflow.get("task_types", {}).get("core_plan")
+    if core_plan_cfg:
+        cp_requires = {l.lower() for l in core_plan_cfg.get("detection", {}).get("labels", ["core-plan"])}
+        if cp_requires.issubset(label_names):
+            return "core_plan", {**core_plan_cfg, "_name": "core_plan"}
+
+    # Block issues route to the Execution Agent
+    block_cfg = config.workflow.get("task_types", {}).get("block")
+    if block_cfg:
+        block_requires = {l.lower() for l in block_cfg.get("detection", {}).get("labels", ["block"])}
+        if block_requires.issubset(label_names):
+            return "block", {**block_cfg, "_name": "block"}
+
+    # Plan issues route to the Planning Agent (legacy)
     plan_cfg = config.workflow.get("task_types", {}).get("plan")
     if plan_cfg:
         plan_requires = {l.lower() for l in plan_cfg.get("detection", {}).get("labels", ["plan"])}
