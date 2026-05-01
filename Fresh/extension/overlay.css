@@ -1,0 +1,19 @@
+/* Selection mode: crosshair cursor on the whole page */
+body.ui-dom-inspector-selecting,
+body.ui-dom-inspector-selecting * {
+  cursor: crosshair !important;
+}
+
+/* Hovered element in selection mode */
+.ui-dom-inspector-hover {
+  outline: 2px dashed #4499ff !important;
+  outline-offset: 2px !important;
+  background-color: rgba(68, 153, 255, 0.06) !important;
+}
+
+/* Selected element */
+[data-ui-dom-inspector-selected="true"] {
+  outline: 2px solid #ff6622 !important;
+  outline-offset: 2px !important;
+  background-color: rgba(255, 102, 34, 0.06) !important;
+}
