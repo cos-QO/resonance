@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>UI DOM Inspector</title>
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        width: 300px;
+        background: #13131f;
+        color: #d0d0e8;
+        font-size: 13px;
+      }
+
+      /* ── Header ── */
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 11px 14px;
+        background: #0f0f1a;
+        border-bottom: 1px solid #22223a;
+      }
+
+      .header-title {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        color: #e8e8ff;
+        flex: 1;
+      }
+
+      .bridge-status {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 10px;
+        color: #6060a0;
+      }
+
+      .bridge-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #3a3a5a;
+        transition: background 0.25s;
+        flex-shrink: 0;
+      }
+
+      .bridge-dot.ok   { background: #3dbb6e; }
+      .bridge-dot.err  { background: #cc4444; }
+
+      /* ── Sections ── */
+      .section {
+        padding: 11px 14px;
+        border-bottom: 1px solid #1e1e32;
+      }
+
+      .section-label {
+        font-size: 9px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: #5050a0;
+        margin-bottom: 9px;
+      }
+
+      /* ── Pinned tab display ── */
+      .tab-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .tab-favicon {
+        width: 14px;
+        height: 14px;
+        border-radius: 2px;
+        flex-shrink: 0;
+        opacity: 0.7;
+      }
+
+      .tab-url {
+        font-size: 11px;
+        color: #5050a0;
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+      }
+
+      .tab-url.set {
+        color: #7ab0f8;
+      }
+
+      /* ── Buttons ── */
+      .btn {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #22223a;
+        border-radius: 6px;
+        background: #1c1c30;
+        color: #b0b0d0;
+        cursor: pointer;
+        font-size: 12px;
+        font-family: inherit;
+        text-align: left;
+        transition: background 0.12s, border-color 0.12s, color 0.12s;
+        margin-bottom: 5px;
+      }
+
+      .btn:last-child { margin-bottom: 0; }
+
+      .btn:hover {
+        background: #232340;
+        border-color: #3a3a60;
+        color: #e0e0ff;
+      }
+
+      .btn:active {
+        background: #181828;
+      }
+
+      .btn.active {
+        background: #152040;
+        border-color: #2255aa;
+        color: #6aacff;
+      }
+
+      .btn.primary {
+        border-color: #2a3a60;
+        background: #172040;
+        color: #7ab0f8;
+      }
+
+      .btn.primary:hover {
+        background: #1e2c55;
+        border-color: #3a5090;
+        color: #a0c8ff;
+      }
+
+      .btn-icon {
+        font-size: 13px;
+        width: 16px;
+        text-align: center;
+        flex-shrink: 0;
+        opacity: 0.85;
+      }
+
+      .btn-label { flex: 1; }
+
+      /* ── Log area ── */
+      .log {
+        padding: 9px 14px 11px;
+        background: #0b0b16;
+        min-height: 52px;
+        max-height: 100px;
+        overflow-y: auto;
+      }
+
+      .log-line {
+        font-size: 11px;
+        font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-all;
+        color: #5050a0;
+      }
+
+      .log-line.ok   { color: #3dbb6e; }
+      .log-line.err  { color: #cc6060; }
+      .log-line.info { color: #6aacff; }
+      .log-line.dim  { color: #404070; }
+    </style>
+  </head>
+  <body>
+
+    <div class="header">
+      <span class="header-title">UI DOM Inspector</span>
+      <div class="bridge-status">
+        <div class="bridge-dot" id="bridge-dot"></div>
+        <span id="bridge-label">checking…</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Target Tab</div>
+      <div class="tab-row">
+        <img class="tab-favicon" id="tab-favicon" src="" alt="" style="display:none" />
+        <span class="tab-url" id="tab-url">No tab pinned — actions use active tab</span>
+      </div>
+      <button class="btn primary" id="pin-tab">
+        <span class="btn-icon">&#9679;</span>
+        <span class="btn-label">Pin current tab as target</span>
+      </button>
+      <button class="btn" id="clear-pin" style="display:none">
+        <span class="btn-icon">&#10005;</span>
+        <span class="btn-label">Clear pinned tab</span>
+      </button>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Inspect</div>
+      <button class="btn" id="select-element">
+        <span class="btn-icon" id="select-icon">&#9678;</span>
+        <span class="btn-label" id="select-label">Select element</span>
+      </button>
+      <button class="btn" id="capture-snapshot">
+        <span class="btn-icon">&#9635;</span>
+        <span class="btn-label">Capture snapshot</span>
+      </button>
+      <button class="btn" id="send-page-state">
+        <span class="btn-icon">&#8593;</span>
+        <span class="btn-label">Send page state</span>
+      </button>
+    </div>
+
+    <div class="log">
+      <div class="log-line dim" id="log">Initialising…</div>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

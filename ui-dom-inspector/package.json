@@ -1,0 +1,17 @@
+{
+  "name": "ui-dom-inspector",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Browser-side inspection layer for supervised UI work.",
+  "scripts": {
+    "bridge": "node bridge/server.js",
+    "mcp": "node mcp-server/server.js",
+    "start": "node bridge/server.js",
+    "check": "node scripts/check-setup.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.5",
+    "zod": "^3.25.0"
+  }
+}

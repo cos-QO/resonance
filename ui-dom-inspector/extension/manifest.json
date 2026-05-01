@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "UI DOM Inspector",
+  "version": "0.1.0",
+  "description": "Live DOM, style, and screenshot inspection for supervised UI work.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:47771/*"
+  ],
+  "action": {
+    "default_title": "UI DOM Inspector",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "css": [
+        "overlay.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
