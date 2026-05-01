@@ -1,14 +1,33 @@
 {
   "mcpServers": {
     "linear": {
-      "command": "node",
-      "args": [
-        "/path/to/npm-global/lib/node_modules/linear-mcp/build/index.js"
-      ]
+      "type": "sse",
+      "url": "https://mcp.linear.app/sse"
     },
     "figma": {
       "command": "npx",
-      "args": ["-y", "figma-developer-mcp", "--stdio"]
+      "args": ["-y", "figma-developer-mcp", "--stdio"],
+      "env": {
+        "FIGMA_API_KEY": "${FIGMA_API_KEY}"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"]
+    },
+    "mermaid": {
+      "type": "http",
+      "url": "https://mcp.mermaid.ai/mcp",
+      "headers": {
+        "Authorization": "${MERMAID_CHART_TOKEN:-}"
+      }
     }
   }
 }
