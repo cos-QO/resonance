@@ -76,6 +76,7 @@ Do not mark work complete without human visual review.
 ## Important Files
 
 - `docs/supervised-session-architecture-v2.md`
+- `docs/ui-dom-inspector.md`
 - `.claude/README.md`
 - `.claude/memory/standards/connectui-design-system.md`
 - `.claude/memory/standards/connectui-stack.md`
@@ -90,6 +91,7 @@ Use these project commands:
 - `/qo-ui-build`
 - `/qo-ui-qa`
 - `/qo-ui-report`
+- `/qo-ui-inspector-setup` — install and start the UI DOM Inspector (bridge + MCP + Chrome extension guide)
 
 ## Subagents
 
@@ -100,3 +102,13 @@ The project keeps only three focused subagents:
 - `ui-qa-agent`
 
 Do not default to large PM-led multi-agent chains for everyday UI work.
+
+## UI DOM Inspector
+
+A browser inspection layer that gives agents live visibility into the rendered page.
+
+Run `/qo-ui-inspector-setup` to install and start it. Once running, agents can call MCP tools to inspect selected elements, capture screenshots, and read computed styles during build and QA work.
+
+The bridge runs persistently via launchd (auto-starts on login). The MCP server is started by Claude Code via `.mcp.json`. The Chrome extension is loaded once manually.
+
+Full docs: `ui-dom-inspector/README.md`

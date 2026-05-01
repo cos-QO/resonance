@@ -16,6 +16,7 @@ It runs inside the browser and is the only layer with direct access to the live 
 | `content-script.js` | Injected into every page: selection mode, element inspection, DOM access |
 | `service-worker.js` | Background: handles screenshot capture, relays page state to bridge |
 | `overlay.css` | Injected styles: crosshair cursor during selection, hover/selected outlines |
+| `icon.svg` | Minimal icon asset for the inspector |
 
 ---
 
@@ -101,3 +102,17 @@ Handles messages that require Chrome API access the content script does not have
 4. Select this `extension/` folder
 
 To reload after code changes: click the reload icon on the extension card.
+
+---
+
+## Icon
+
+The extension now includes a minimal icon at `icon.svg`.
+
+It visually represents:
+
+- a UI surface
+- a highlighted inspected element
+- a lens / inspector metaphor
+
+It is not wired into the manifest yet because Chrome extension icons are safest when exported as PNG sizes (`16`, `32`, `48`, `128`). This SVG is the source asset for that export step.

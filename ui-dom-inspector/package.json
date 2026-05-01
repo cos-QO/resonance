@@ -6,8 +6,10 @@
   "description": "Browser-side inspection layer for supervised UI work.",
   "scripts": {
     "bridge": "node bridge/server.js",
+    "bridge:bg": "node scripts/start-bridge-bg.js",
+    "bridge:stop": "node scripts/stop-bridge.js",
     "mcp": "node mcp-server/server.js",
-    "start": "node bridge/server.js",
+    "status": "node scripts/status.js",
     "check": "node scripts/check-setup.js"
   },
   "dependencies": {

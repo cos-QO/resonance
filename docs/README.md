@@ -6,7 +6,7 @@ This repo now keeps only the documentation needed for the Claude-first supervise
 
 - [Supervised Session Architecture v2](./supervised-session-architecture-v2.md) — operating model and design
 - [Claude Workflow Reference](./claude-workflow-reference.md) — operator guide: commands, subagents, MCPs, validation
-- [Workflow Simulation](./workflow-simulation.md) — end-to-end example with diagrams showing exactly what happens at each step
+- [UI DOM Inspector](./ui-dom-inspector.md) — browser-side inspection layer plan and integration
 
 ## Purpose
 

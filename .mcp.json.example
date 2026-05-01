@@ -28,6 +28,13 @@
       "headers": {
         "Authorization": "${MERMAID_CHART_TOKEN:-}"
       }
+    },
+    "ui-dom-inspector": {
+      "command": "node",
+      "args": ["ui-dom-inspector/mcp-server/server.js"],
+      "env": {
+        "UI_DOM_INSPECTOR_BRIDGE_URL": "http://127.0.0.1:47771"
+      }
     }
   }
 }

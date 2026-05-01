@@ -25,6 +25,8 @@ The operating model is simple:
   Project MCP configuration for Linear, Figma, GitHub, Playwright, and Mermaid.
 - `docs/supervised-session-architecture-v2.md`
   The main architecture and workflow design document.
+- `docs/ui-dom-inspector.md`
+  The plan for the browser-side inspector layer that will improve agent vision.
 
 ## Official Claude Code Shape
 
@@ -63,4 +65,5 @@ This repo follows Anthropic's Claude Code project conventions:
 ## Documentation
 
 - [docs/supervised-session-architecture-v2.md](./docs/supervised-session-architecture-v2.md)
+- [docs/ui-dom-inspector.md](./docs/ui-dom-inspector.md)
 - [docs/README.md](./docs/README.md)
