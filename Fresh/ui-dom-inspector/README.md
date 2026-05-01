@@ -133,9 +133,23 @@ This is intentionally not added to the repo's `.mcp.json` by default. Enable it 
 
 ### Pinning a tab
 
-Open the extension popup and click **Pin current tab as target**.
+There are two ways to pin a tab.
 
-This locks the extension's target to that specific tab. Every subsequent action — select element, capture snapshot, send page state — operates on the pinned tab regardless of which tab you have in the foreground.
+**Manual (user-initiated):** Open the extension popup and click **Pin current tab as target**. This locks the extension's target to that specific tab immediately.
+
+**Automatic (agent-initiated):** The agent can call the `ui_dom_inspector_pin_tab` MCP tool with a URL. The tool enqueues a `pin-tab` command on the bridge; the content script picks it up within 500 ms, relays it to the service worker, which finds or opens the tab and pins it. No popup click required. Use this at the start of a session when the dev server is already running but no tab has been pinned yet.
+
+```
+Agent calls ui_dom_inspector_pin_tab("http://localhost:3000")
+  → bridge enqueues command
+  → any open tab's content script relays to service worker
+  → service worker finds or opens the tab, pins it
+  → MCP tool polls until confirmed (≤10 s)
+```
+
+If the URL is not yet open in Chrome and `openIfMissing` is `true` (the default), the service worker opens a new tab automatically.
+
+Every subsequent action — select element, capture snapshot, send page state — operates on the pinned tab regardless of which tab you have in the foreground.
 
 The pinned tab URL is also posted to the bridge so Claude can read it and tell Playwright which URL to navigate to.
 
@@ -167,6 +181,7 @@ Claude can call these tools when the MCP server is connected:
 | Tool | What it returns |
 |---|---|
 | `ui_dom_inspector_health` | Bridge status, whether session and snapshot data are present |
+| `ui_dom_inspector_pin_tab` | Pin a URL as the supervised tab — finds or opens the tab, no popup click needed |
 | `ui_dom_inspector_get_pinned_tab` | URL and title of the pinned tab — use this to tell Playwright where to navigate |
 | `ui_dom_inspector_get_selected_element` | Selector, tag, role, text, classes, bounds, computed styles, ancestry, component hints |
 | `ui_dom_inspector_get_page_state` | Page URL, title, and selected element data |
@@ -179,13 +194,19 @@ Claude can call these tools when the MCP server is connected:
 
 The pinned tab URL connects the inspector to Playwright.
 
-Typical pattern during `qo-ui-build`:
+Typical pattern at the start of a new session (no tab pinned yet):
 
-1. You pin the tab running your local dev server (e.g. `http://localhost:3000/campaigns`)
-2. Claude calls `ui_dom_inspector_get_pinned_tab` to get that URL
-3. Claude tells Playwright to navigate to the same URL
-4. Playwright takes its own screenshots; the inspector adds element-level detail
-5. Both tools are working on the same page
+1. Agent starts the dev server (e.g. `npm run dev`)
+2. Agent calls `ui_dom_inspector_pin_tab("http://localhost:3000")` — extension opens and pins the tab automatically
+3. Agent calls `ui_dom_inspector_get_pinned_tab` to confirm the URL
+4. Agent tells Playwright to navigate to the same URL
+
+Typical pattern when the user has already pinned a tab:
+
+1. Agent calls `ui_dom_inspector_get_pinned_tab` to get that URL
+2. Agent tells Playwright to navigate to the same URL
+3. Playwright takes its own screenshots; the inspector adds element-level detail
+4. Both tools are working on the same page
 
 ---
 
@@ -200,8 +221,10 @@ The bridge runs at `http://127.0.0.1:47771` by default. Port is configurable via
 | `POST` | `/session/update` | Stores a new page state payload (sent by extension after element selection) |
 | `POST` | `/snapshot` | Stores a screenshot artifact (sent by service worker) |
 | `GET` | `/session/pinned-tab` | Returns the currently pinned tab info |
-| `POST` | `/session/pinned-tab` | Sets the pinned tab (sent by extension popup on pin) |
+| `POST` | `/session/pinned-tab` | Sets the pinned tab (sent by popup on manual pin, or service worker on agent-initiated pin) |
 | `DELETE` | `/session/pinned-tab` | Clears the pinned tab |
+| `POST` | `/commands/enqueue` | Queues a command for the content script — supports `get-page-state`, `capture-snapshot`, `pin-tab` |
+| `GET` | `/commands/poll` | Content script polls this every 500 ms to consume the next queued command |
 
 ---
 

@@ -139,18 +139,23 @@ Clears the pinned tab. Called when the user toggles the pin off in the popup.
 
 Queues a command for the content script to execute. Called by the MCP server when a tool needs fresh data.
 
-Request body:
+Supported command types:
+
 ```json
 { "type": "get-page-state" }
 ```
-or
 ```json
 { "type": "capture-snapshot" }
 ```
+```json
+{ "type": "pin-tab", "url": "http://localhost:3000", "openIfMissing": true }
+```
+
+The `pin-tab` command is relayed by the content script to the service worker, which finds or opens the tab and registers it as the pinned target. `openIfMissing` defaults to `true`.
 
 Response:
 ```json
-{ "ok": true, "command": { "type": "get-page-state", "enqueuedAt": "2026-05-01T14:00:00Z" } }
+{ "ok": true, "command": { "type": "pin-tab", "url": "http://localhost:3000", "openIfMissing": true, "enqueuedAt": "2026-05-01T14:00:00Z" } }
 ```
 
 Only one command can be pending at a time. A new enqueue overwrites the previous one.

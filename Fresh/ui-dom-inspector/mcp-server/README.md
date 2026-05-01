@@ -41,6 +41,22 @@ Use this first to confirm the inspector is live before calling other tools.
 
 ---
 
+### `ui_dom_inspector_pin_tab`
+
+Pin a specific URL as the supervised tab — without requiring the user to click the popup.
+
+Parameters:
+- `url` (string, required) — full URL to pin, e.g. `http://localhost:3000`
+- `openIfMissing` (boolean, default `true`) — if no tab with this URL is currently open, open one automatically
+
+Use this at the start of a session when the dev server is running but no tab has been pinned yet. The tool enqueues a `pin-tab` command on the bridge; the content script picks it up within 500 ms, relays it to the service worker, which resolves or opens the tab and registers it as the pinned target. The tool polls until the bridge confirms the pin (up to 10 s).
+
+Returns `{ ok: true, pinnedTab: { tabId, url, title, pinnedAt } }` on success, or `{ ok: false, error }` if the timeout is reached.
+
+**Prerequisite:** At least one browser tab must be open so the content script poll can relay the command to the service worker.
+
+---
+
 ### `ui_dom_inspector_get_pinned_tab`
 
 Returns the URL and title of the tab the user has pinned as the supervised target.
@@ -123,6 +139,9 @@ Use this during QA to quickly audit what the selected element looks like without
 ## How it fits into the workflow
 
 ```
+session start (no tab pinned yet):
+  call ui_dom_inspector_pin_tab             → open and pin the dev server URL automatically
+
 qo-ui-analyze:
   call ui_dom_inspector_get_pinned_tab      → confirm which page to inspect
   call ui_dom_inspector_get_page_state      → see existing DOM structure

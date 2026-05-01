@@ -56,8 +56,11 @@ Injected into every page at `document_idle`.
 
 **Agent command polling**:
 - Polls `GET /commands/poll` every 500 ms
-- When the agent calls `get_page_state` or `get_latest_snapshot`, the MCP server enqueues a command on the bridge; the content script picks it up and executes it — no manual popup clicks needed
-- Supported commands: `get-page-state` (pushes DOM state), `capture-snapshot` (delegates to service worker)
+- When the agent enqueues a command on the bridge, the content script picks it up and executes it — no manual popup clicks needed
+- Supported commands:
+  - `get-page-state` — pushes current DOM state to the bridge
+  - `capture-snapshot` — delegates screenshot to service worker
+  - `pin-tab` — relays the pin request to the service worker, which finds or opens the tab and registers it as the pinned target
 - Also relays `agentActive` from each poll response to the service worker so the badge updates within 500 ms of a tool call starting
 
 **Element payload** includes:
@@ -88,6 +91,13 @@ Handles messages that require Chrome API access the content script does not have
 **`ui-dom-inspector:auto-capture`**:
 - Triggered by the content script when a `capture-snapshot` command arrives from the bridge
 - Reads the pinned tab from session storage, calls `captureVisibleTab`, posts the JPEG to `/snapshot`
+
+**`ui-dom-inspector:pin-tab`**:
+- Triggered by the content script when a `pin-tab` command arrives from the bridge
+- Receives `{ url, openIfMissing }` from the content script relay
+- Calls `chrome.tabs.query` to find an existing tab matching the URL; if none is found and `openIfMissing` is true, calls `chrome.tabs.create`
+- Writes the resolved tab to `chrome.storage.session` and POSTs to `/session/pinned-tab` on the bridge
+- Returns `{ ok, tabId, url }` to the content script
 
 **`ui-dom-inspector:set-badge`**:
 - Triggered by the content script to relay `agentActive` state from poll responses

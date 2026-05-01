@@ -110,3 +110,40 @@ Replaced with a single toggle row — a label + a CSS pill track/thumb. The `.on
 ## Bridge port
 
 Default port is `47771`. Chosen to avoid conflicts with common dev server ports (3000, 5173, 8080, etc.). Configurable via `UI_DOM_INSPECTOR_BRIDGE_PORT`.
+
+---
+
+## Agent-initiated tab pinning
+
+The original pin mechanism was manual-only: the user had to open the extension popup and click the pin toggle. This blocked the agent from self-starting inspection on a fresh project where no tab had been pinned yet.
+
+### The constraint
+
+Tab management APIs (`chrome.tabs.query`, `chrome.tabs.create`, `chrome.storage.session`) are only available in the service worker, not in content scripts. Content scripts can fetch the bridge but cannot touch tabs.
+
+### The solution
+
+A three-hop relay:
+
+```
+MCP tool → bridge command queue → content script poll → service worker → tabs API
+```
+
+1. The MCP tool `ui_dom_inspector_pin_tab` enqueues a `pin-tab` command on the bridge with `{ url, openIfMissing }`.
+2. The content script polls `/commands/poll` every 500 ms from every open tab. The first content script to poll picks up the command (the queue is consumed on read — only one handler runs).
+3. The content script sends a `chrome.runtime.sendMessage({ type: "ui-dom-inspector:pin-tab", url, openIfMissing })` to the service worker.
+4. The service worker has tab access: it runs `chrome.tabs.query` to find an existing tab matching the URL. If none is found and `openIfMissing` is true, it calls `chrome.tabs.create`.
+5. Once the tab is resolved, the service worker writes to `chrome.storage.session` and POSTs to `/session/pinned-tab` on the bridge — the same path used by the popup.
+6. The MCP tool polls `GET /session/pinned-tab` until the URL matches (700 ms intervals, 10 s timeout) and returns the confirmed pin.
+
+### Why content script relay instead of service worker polling
+
+MV3 service workers are terminated by Chrome when idle. A `setInterval` in the service worker cannot be relied on for persistent polling. Chrome alarms have a 1-minute minimum interval. The content script, attached to a live page, is the reliable poller. It already polls for other commands — `pin-tab` is simply a third command type that it relays upward.
+
+### The one prerequisite
+
+At least one browser tab must be open for the content script relay to work. If Chrome is open (which it must be for the extension to run), this is always satisfied in practice.
+
+### URL matching
+
+Chrome's `chrome.tabs.query` accepts URL match patterns. The service worker converts the bare URL to a wildcard pattern (`http://localhost:3000/*`) and falls back to an exact match for the root path. If neither finds a tab and `openIfMissing` is true, a new tab is created at the bare URL and re-fetched after an 800 ms wait to allow navigation to start.
