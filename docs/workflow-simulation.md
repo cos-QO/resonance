@@ -20,15 +20,15 @@ This is a bounded, realistic task — one screen area, clear Figma reference, ex
 
 ```mermaid
 flowchart LR
-    A[Linear issue\nready] --> B[/qo-ui-kickoff\nContext assembly]
-    B --> C[/qo-ui-analyze\nComponent map + plan]
+    A["Linear issue<br/>ready"] --> B["qo-ui-kickoff<br/>Context assembly"]
+    B --> C["qo-ui-analyze<br/>Component map + plan"]
     C --> D{Human approval}
-    D -- approved --> E[/qo-ui-build\nImplement + Playwright loop]
+    D -- approved --> E["qo-ui-build<br/>Implement + Playwright loop"]
     D -- needs changes --> C
-    E --> F[/qo-ui-qa\nAudit]
-    F --> G[/qo-ui-report\nHandoff summary]
+    E --> F["qo-ui-qa<br/>Audit"]
+    F --> G["qo-ui-report<br/>Handoff summary"]
     G --> H{Human review}
-    H -- accepted --> I[Linear: Done\nPR opened]
+    H -- accepted --> I["Linear: Done<br/>PR opened"]
     H -- iterate --> E
 ```
 
@@ -82,7 +82,7 @@ If any of these are missing, `/qo-ui-kickoff` will stop and ask before proceedin
 flowchart TD
     A[Read Linear issue QO-142] --> B[Pull Figma frame metadata]
     B --> C[Read existing ContactsFilterPanel source]
-    C --> D[Read .claude/memory/standards/]
+    C --> D["Read standards from .claude/memory/standards"]
     D --> E{All required inputs present?}
     E -- yes --> F[Produce context bundle summary]
     E -- no --> G[Ask user for missing input]
@@ -184,7 +184,7 @@ Claude does not write any implementation code until you approve.
 
 ```mermaid
 flowchart TD
-    A[Apply approved plan] --> B[Edit ContactsFilterPanel/index.tsx]
+    A[Apply approved plan] --> B["Edit ContactsFilterPanel/index.tsx"]
     B --> C[Open page in Playwright browser]
     C --> D[Take screenshot]
     D --> E{Compare with Figma target}
@@ -347,8 +347,8 @@ flowchart LR
     B -- accept --> C[Post Linear update]
     C --> D[Open PR]
     B -- iterate --> E[One specific correction]
-    E --> F[/qo-ui-build targeted pass]
-    F --> G[/qo-ui-qa]
+    E --> F["qo-ui-build targeted pass"]
+    F --> G[qo-ui-qa]
     G --> A
 ```
 
@@ -387,11 +387,28 @@ A run can stall or degrade at several points. Here is what each failure looks li
 
 ```mermaid
 flowchart TD
-    A[Kickoff] -->|missing Figma URL| B[Claude asks for it — pause]
-    C[Analyze] -->|ambiguous component mapping| D[Claude lists open questions — you answer]
-    E[Build] -->|Playwright can't reach dev server| F[You start dev server, Claude retries]
-    G[QA] -->|token violation found| H[Claude flags required fix — targeted build pass]
-    I[Review] -->|visual not close enough| J[You describe the delta, Claude iterates]
+    subgraph Kickoff failure
+        A1[Missing Figma URL or acceptance criteria] --> A2[Claude pauses and asks you to fill the gap]
+        A2 --> A3[You update the Linear issue and re-run kickoff]
+    end
+    subgraph Analyze failure
+        B1[Ambiguous component mapping or open question] --> B2[Claude lists open questions and waits]
+        B2 --> B3[You answer and approve the revised plan]
+    end
+    subgraph Build failure
+        C1[Playwright cannot reach the dev server] --> C2[You start the dev server]
+        C2 --> C3[Claude retries the browser step]
+        C4[Visual drift too large after 2 passes] --> C5[You narrow scope or clarify the delta]
+        C5 --> C3
+    end
+    subgraph QA failure
+        D1[Token violation or bespoke CSS found] --> D2[Claude flags it as a required fix]
+        D2 --> D3[Targeted build pass to fix only that issue]
+    end
+    subgraph Review failure
+        E1[Visual not close enough to accept] --> E2[You describe one specific correction]
+        E2 --> E3[Claude runs a targeted build pass and re-captures]
+    end
 ```
 
 Recoveries are always bounded — one issue at a time, no silent workarounds.
