@@ -2,6 +2,8 @@
 
 This document walks through a real-feeling end-to-end example of the supervised UI workflow so you can understand what happens at each step, what Claude does, what you do, and what gets produced.
 
+> **Test the diagrams live**: copy any `flowchart` block below and paste it at [mermaid.live](https://mermaid.live) to render and explore it interactively.
+
 ---
 
 ## The Scenario
