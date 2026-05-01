@@ -11,11 +11,11 @@ async function getJson(path) {
   return response.json();
 }
 
-async function enqueueCommand(type) {
+async function enqueueCommand(type, extra = {}) {
   await fetch(`${bridgeUrl}/commands/enqueue`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type }),
+    body: JSON.stringify({ type, ...extra }),
     signal: AbortSignal.timeout(2000)
   });
 }
@@ -87,6 +87,43 @@ server.tool(
   withAgentStatus(async () => {
     const data = await getJson("/session/pinned-tab");
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  })
+);
+
+// ── Pin tab by URL (agent-initiated) ─────────────────────────────────────────
+server.tool(
+  "ui_dom_inspector_pin_tab",
+  "Tell the extension to pin a specific URL as the supervised tab. Use this at the start of a session to point the inspector at the locally-running dev server (e.g. http://localhost:3000) without requiring the user to click the popup. If the tab is not already open and openIfMissing is true (the default), the extension will open it automatically. The tool waits up to 10 s for confirmation, then returns.",
+  {
+    url: z.string().describe("Full URL to pin, e.g. http://localhost:3000"),
+    openIfMissing: z.boolean().optional().default(true).describe("Open a new tab if no tab with this URL is currently open")
+  },
+  withAgentStatus(async ({ url, openIfMissing }) => {
+    await enqueueCommand("pin-tab", { url, openIfMissing });
+
+    // Poll until the bridge confirms the tab is pinned or timeout
+    const base = url.replace(/\/$/, "").split("?")[0];
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 700));
+      const data = await getJson("/session/pinned-tab");
+      const pinnedUrl = data.pinnedTab?.url || "";
+      if (pinnedUrl.startsWith(base)) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: true, pinnedTab: data.pinnedTab }, null, 2) }]
+        };
+      }
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          ok: false,
+          error: "Timeout: command was enqueued but no content script confirmed the pin within 10 s. Ensure at least one browser tab is open so the content script can relay the command."
+        }, null, 2)
+      }]
+    };
   })
 );
 

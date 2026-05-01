@@ -186,7 +186,12 @@ const server = http.createServer(async (req, res) => {
   // GET  /commands/poll     — content script polls and consumes the next command
   if (req.method === "POST" && req.url === "/commands/enqueue") {
     const body = await readBody(req);
-    pendingCommand = { type: body.type, enqueuedAt: new Date().toISOString() };
+    pendingCommand = {
+      type: body.type,
+      url: body.url || null,
+      openIfMissing: body.openIfMissing ?? true,
+      enqueuedAt: new Date().toISOString()
+    };
     sendJson(res, 200, { ok: true, command: pendingCommand });
     return;
   }

@@ -1,29 +1,36 @@
-# Naming Conventions
+# Naming Conventions — ConnectUI
 
-**Status**: Ready for analysis
-**Last Updated**: Not analyzed yet
-**Analyzed by**: `/prepare` command
+**Source**: `connect-ui-main/src/` — verified from real codebase
 
-> ⚠️ Stub file. Populated by `/prepare` in each target project — do not edit in cc-ready source.
+## Files and folders
 
-## Auto-Analysis Process
+| Type | Convention | Example |
+|---|---|---|
+| React component file | PascalCase `.tsx` | `ListCard.tsx` |
+| Hook file | camelCase `.ts` | `useLists.ts` |
+| Utility file | camelCase `.ts` | `formatDate.ts` |
+| Feature folder | PascalCase | `src/features/DragonTiles/` |
+| Component folder | PascalCase | `src/components/OrionComponents/` |
+| Route file | TanStack Router convention | `_auth.settings.$siteId.lists.tsx` |
 
-When `/prepare` runs, it will:
-1. Detect naming patterns used across the existing codebase
-2. Compare them to language-idiomatic defaults (PEP 8, camelCase JS, PascalCase Swift types, etc.)
-3. Document the project's naming rules for files, identifiers, and resources
-4. Populate the sections below
+## Identifiers
 
-## Sections `/prepare` Will Populate
+| Type | Convention | Example |
+|---|---|---|
+| Component | PascalCase | `ListsPage`, `OrionSwitch` |
+| Styled component | PascalCase, descriptive | `StyledContainer`, `HeaderSection` |
+| Hook | `use` prefix + PascalCase | `useLists`, `useDeleteList` |
+| Props interface | `<Component>Props` | `OrionInputProps`, `WizardContainerProps` |
+| Event handler | `handle` prefix | `handleChange`, `handleBlur` |
+| Boolean state | `is` / `has` / `show` prefix | `isLoading`, `hasError`, `showModal` |
+| Constants | SCREAMING_SNAKE_CASE | `STORYBOOK_PROPS`, `VITE_FF_FEATURE` |
 
-### File & Folder Naming
-- Source files, test files, config files, documentation
+## MUI component overrides
 
-### Identifier Naming
-- Variables, constants, functions, classes, interfaces, types
+Orion custom components follow `Orion<ComponentName>` pattern:
+- `OrionSwitch` (not `CustomSwitch` or `QueenSwitch`)
+- `OrionToggleButtonGroup`
+- `OrionInput`
 
-### Database & Storage
-- Table, column, collection, key naming
-
-### API & URLs
-- Endpoint naming, query parameters, header conventions
+Styled layout components within a file are descriptive:
+- `StyledContainer`, `HeaderSection`, `SearchSection`, `LoadingCard`

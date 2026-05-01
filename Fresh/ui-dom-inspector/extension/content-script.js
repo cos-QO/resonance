@@ -223,6 +223,12 @@ async function pollCommands() {
       await autoBridgeState();
     } else if (data.command.type === "capture-snapshot") {
       chrome.runtime.sendMessage({ type: "ui-dom-inspector:auto-capture", pageUrl: window.location.href }).catch(() => {});
+    } else if (data.command.type === "pin-tab") {
+      chrome.runtime.sendMessage({
+        type: "ui-dom-inspector:pin-tab",
+        url: data.command.url,
+        openIfMissing: data.command.openIfMissing ?? true
+      }).catch(() => {});
     }
   } catch {
     // Bridge not running or tab not ready — non-fatal

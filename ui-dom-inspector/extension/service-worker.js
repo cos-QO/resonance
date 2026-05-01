@@ -203,6 +203,62 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  // Agent-initiated pin — content script relays here because tab APIs and
+  // session storage are only available in the service worker.
+  if (message.type === "ui-dom-inspector:pin-tab") {
+    (async () => {
+      try {
+        const { url, openIfMissing } = message;
+
+        // Build a Chrome URL match pattern from the bare URL
+        const base = url.replace(/\/$/, "");
+        const pattern = base.includes("*") ? base : `${base}/*`;
+
+        let [tab] = await chrome.tabs.query({ url: pattern });
+
+        // Also try without trailing wildcard (exact match for root path)
+        if (!tab) {
+          [tab] = await chrome.tabs.query({ url: base });
+        }
+
+        if (!tab && openIfMissing) {
+          tab = await chrome.tabs.create({ url: base });
+          // Brief wait so the tab has an id before we pin it
+          await new Promise(r => setTimeout(r, 800));
+          // Re-fetch to get updated url/title after navigation starts
+          tab = await chrome.tabs.get(tab.id);
+        }
+
+        if (!tab?.id) {
+          sendResponse({ ok: false, error: "Tab not found and openIfMissing is false" });
+          return;
+        }
+
+        const resolvedUrl = tab.url || base;
+        const resolvedTitle = tab.title || "";
+        const resolvedFavicon = tab.favIconUrl || "";
+
+        await chrome.storage.session.set({
+          pinnedTabId: tab.id,
+          pinnedTabUrl: resolvedUrl,
+          pinnedTabTitle: resolvedTitle,
+          pinnedTabFavicon: resolvedFavicon
+        });
+
+        await postJson("/session/pinned-tab", {
+          tabId: tab.id,
+          url: resolvedUrl,
+          title: resolvedTitle
+        });
+
+        sendResponse({ ok: true, tabId: tab.id, url: resolvedUrl });
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message });
+      }
+    })();
+    return true;
+  }
+
   // Agent-initiated capture — content script relays here because only the
   // service worker can call captureVisibleTab.
   if (message.type === "ui-dom-inspector:auto-capture") {
