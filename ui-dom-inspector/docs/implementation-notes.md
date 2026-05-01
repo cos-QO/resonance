@@ -77,6 +77,36 @@ The crosshair cursor is applied via a `ui-dom-inspector-selecting` class on `doc
 
 ---
 
+## Agent command polling
+
+The original design was push-only: the extension only sent data to the bridge when the user manually clicked a popup button. This meant the agent could only read stale cached state.
+
+To give the agent live access without manual clicks, a command queue was added to the bridge (`POST /commands/enqueue`, `GET /commands/poll`). The content script polls every 500 ms. When the MCP server enqueues a command, the content script picks it up within 500 ms and executes it.
+
+500 ms was chosen over the original 2000 ms as the practical minimum that avoids perceived latency during UI work without measurable page impact. The requests are tiny (sub-1 KB) to localhost only.
+
+For snapshot commands, the content script cannot call `captureVisibleTab` directly (content script restriction). It sends a `ui-dom-inspector:auto-capture` message to the service worker, which performs the capture and posts the result to the bridge.
+
+The MCP tools `get_page_state` and `get_latest_snapshot` enqueue a command and then poll `GET /session/current` until `updatedAt` changes (600 ms intervals, 10 s timeout). This makes both tools fully automatic — no user interaction required.
+
+---
+
+## Badge relay for agent activity
+
+The service worker updates the badge on a 1-minute alarm and on popup open. This means the badge would not go yellow until up to 60 s after an agent tool call started — too slow to be a useful signal.
+
+Fix: the content script checks `agentActive` from each `/commands/poll` response (it is included for free). When the value changes, the content script sends `ui-dom-inspector:set-badge` to the service worker, which calls `setBadge` immediately. The badge now reflects agent activity within one poll cycle (≤500 ms).
+
+---
+
+## Pin toggle
+
+The original popup had two buttons: "Pin current tab" (primary) + a hidden "Clear pinned tab" that appeared when a tab was pinned. This was visually cluttered.
+
+Replaced with a single toggle row — a label + a CSS pill track/thumb. The `.on` class drives the visual state (blue track, sliding thumb, blue label). One click pins; another click unpins. Functionally identical to the two-button approach.
+
+---
+
 ## Bridge port
 
 Default port is `47771`. Chosen to avoid conflicts with common dev server ports (3000, 5173, 8080, etc.). Configurable via `UI_DOM_INSPECTOR_BRIDGE_PORT`.

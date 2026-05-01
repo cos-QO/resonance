@@ -11,6 +11,30 @@ async function getJson(path) {
   return response.json();
 }
 
+async function enqueueCommand(type) {
+  await fetch(`${bridgeUrl}/commands/enqueue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type }),
+    signal: AbortSignal.timeout(2000)
+  });
+}
+
+// Enqueues a command then polls until updatedAt changes (max ~10 s).
+// Returns the fresh session, or null on timeout.
+async function requestFresh(commandType, timeoutMs = 10000) {
+  const before = (await getJson("/session/current")).session?.updatedAt ?? null;
+  await enqueueCommand(commandType);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 600));
+    const data = await getJson("/session/current");
+    const current = data.session?.updatedAt ?? null;
+    if (current && current !== before) return data.session;
+  }
+  return null;
+}
+
 // Notifies the bridge (and therefore the extension badge) that an agent tool
 // call is starting (active=true) or finishing (active=false).
 // Non-fatal — if the bridge is down the tool still runs.
@@ -84,8 +108,8 @@ server.tool(
   "Get the latest page state from the bridge: page URL, title, and selected element data.",
   {},
   withAgentStatus(async () => {
-    const data = await getJson("/session/current");
-    const payload = data.session?.payload ?? null;
+    const session = await requestFresh("get-page-state");
+    const payload = session?.payload ?? null;
     return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
   })
 );
@@ -93,11 +117,11 @@ server.tool(
 // ── Latest snapshot (returns the actual image) ────────────────────────────────
 server.tool(
   "ui_dom_inspector_get_latest_snapshot",
-  "Get the latest screenshot captured by the extension. Returns the actual image (not just a path) so you can see the current page state.",
+  "Get the latest screenshot captured by the extension. Returns the image so you can see the current state of the page.",
   {},
   withAgentStatus(async () => {
-    const data = await getJson("/session/current");
-    const snapshot = data.session?.latestSnapshot ?? null;
+    const session = await requestFresh("capture-snapshot");
+    const snapshot = session?.latestSnapshot ?? null;
 
     if (!snapshot?.artifact?.path) {
       return {

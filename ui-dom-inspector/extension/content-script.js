@@ -197,6 +197,40 @@ document.addEventListener("keydown", (event) => {
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
+// ── Agent command polling ─────────────────────────────────────────────────────
+// Polls the bridge every 2 s so the agent can trigger captures without manual
+// popup clicks. The bridge queues a command; content script consumes and runs it.
+
+let _lastAgentActive = null;
+
+async function pollCommands() {
+  try {
+    const res = await fetch(`${BRIDGE}/commands/poll`, { signal: AbortSignal.timeout(1500) });
+    const data = await res.json();
+
+    // Relay badge state to service worker whenever agentActive changes
+    if (data.agentActive !== _lastAgentActive) {
+      _lastAgentActive = data.agentActive;
+      chrome.runtime.sendMessage({
+        type: "ui-dom-inspector:set-badge",
+        state: data.agentActive ? "agent-active" : "connected"
+      }).catch(() => {});
+    }
+
+    if (!data.command) return;
+
+    if (data.command.type === "get-page-state") {
+      await autoBridgeState();
+    } else if (data.command.type === "capture-snapshot") {
+      chrome.runtime.sendMessage({ type: "ui-dom-inspector:auto-capture", pageUrl: window.location.href }).catch(() => {});
+    }
+  } catch {
+    // Bridge not running or tab not ready — non-fatal
+  }
+}
+
+setInterval(pollCommands, 500);
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "ui-dom-inspector:start-selection") {
     enterSelectionMode();

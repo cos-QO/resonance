@@ -131,7 +131,47 @@ Request body:
 
 ### `DELETE /session/pinned-tab`
 
-Clears the pinned tab. Called when the user clicks "Clear pinned tab" in the popup.
+Clears the pinned tab. Called when the user toggles the pin off in the popup.
+
+---
+
+### `POST /commands/enqueue`
+
+Queues a command for the content script to execute. Called by the MCP server when a tool needs fresh data.
+
+Request body:
+```json
+{ "type": "get-page-state" }
+```
+or
+```json
+{ "type": "capture-snapshot" }
+```
+
+Response:
+```json
+{ "ok": true, "command": { "type": "get-page-state", "enqueuedAt": "2026-05-01T14:00:00Z" } }
+```
+
+Only one command can be pending at a time. A new enqueue overwrites the previous one.
+
+---
+
+### `GET /commands/poll`
+
+Returns and clears the current pending command. Called by the content script every 500 ms.
+
+Also includes `agentActive` so the content script can relay badge state to the service worker.
+
+Response when a command is pending:
+```json
+{ "ok": true, "command": { "type": "get-page-state", "enqueuedAt": "2026-05-01T14:00:00Z" }, "agentActive": true }
+```
+
+Response when idle:
+```json
+{ "ok": true, "command": null, "agentActive": false }
+```
 
 ---
 

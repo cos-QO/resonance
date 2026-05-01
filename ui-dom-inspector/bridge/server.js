@@ -18,6 +18,9 @@ let sessionState = {
   agentActiveAt: null   // ISO timestamp — auto-cleared after 30 s
 };
 
+// Command queue — agent enqueues, content script polls and executes
+let pendingCommand = null;
+
 // Auto-clear agentActive if the MCP server crashes mid-tool and never sends idle
 const AGENT_ACTIVE_TIMEOUT_MS = 30_000;
 setInterval(() => {
@@ -175,6 +178,23 @@ const server = http.createServer(async (req, res) => {
     };
     await persistState();
     sendJson(res, 200, { ok: true, snapshot: sessionState.latestSnapshot });
+    return;
+  }
+
+  // ── Command queue ────────────────────────────────────────────────────────────
+  // POST /commands/enqueue  — MCP tool queues a command for the content script
+  // GET  /commands/poll     — content script polls and consumes the next command
+  if (req.method === "POST" && req.url === "/commands/enqueue") {
+    const body = await readBody(req);
+    pendingCommand = { type: body.type, enqueuedAt: new Date().toISOString() };
+    sendJson(res, 200, { ok: true, command: pendingCommand });
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/commands/poll") {
+    const cmd = pendingCommand;
+    pendingCommand = null;
+    sendJson(res, 200, { ok: true, command: cmd, agentActive: sessionState.agentActive });
     return;
   }
 

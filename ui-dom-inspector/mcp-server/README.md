@@ -83,6 +83,8 @@ Includes:
 
 Returns the latest page state: page URL, title, and selected element (same payload as above but wrapped with page context).
 
+**Auto-triggers a fresh capture.** Enqueues a `get-page-state` command on the bridge and waits up to 10 s for the content script to push updated data. No manual "Send page state" click needed.
+
 ---
 
 ### `ui_dom_inspector_get_latest_snapshot`
@@ -90,6 +92,8 @@ Returns the latest page state: page URL, title, and selected element (same paylo
 Returns the most recent screenshot as a **JPEG image** (not just a file path — the actual image content).
 
 Also returns metadata: `pageUrl`, `capturedAt`, `filename`.
+
+**Auto-triggers a fresh capture.** Enqueues a `capture-snapshot` command on the bridge and waits up to 10 s for the service worker to deliver the screenshot. No manual "Capture snapshot" click needed.
 
 Use this to visually verify the current page state.
 

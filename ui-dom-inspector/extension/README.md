@@ -29,8 +29,7 @@ The popup is the control panel.
 
 **Target Tab section**:
 - Displays the pinned tab URL when one is set
-- "Pin current tab" stores the active tab as the inspection target and posts it to the bridge
-- "Clear pinned tab" removes the pin
+- **Pin toggle** — click to pin the current tab as the inspection target (toggle on = pinned, toggle off = unpinned). Replaces the old two-button Pin/Clear approach.
 
 **Inspect section**:
 - **Select element** — starts element selection mode on the pinned tab (or active tab if none is pinned). Click again or press Escape to cancel.
@@ -54,6 +53,12 @@ Injected into every page at `document_idle`.
 **After selection**:
 - Immediately calls `fetch` to post the page state (URL + full element payload) to the bridge at `http://127.0.0.1:47771/session/update`
 - Sends `ui-dom-inspector:selection-complete` runtime message to the popup if it is still open
+
+**Agent command polling**:
+- Polls `GET /commands/poll` every 500 ms
+- When the agent calls `get_page_state` or `get_latest_snapshot`, the MCP server enqueues a command on the bridge; the content script picks it up and executes it — no manual popup clicks needed
+- Supported commands: `get-page-state` (pushes DOM state), `capture-snapshot` (delegates to service worker)
+- Also relays `agentActive` from each poll response to the service worker so the badge updates within 500 ms of a tool call starting
 
 **Element payload** includes:
 - selector (id, data-qo-id, or tag+classes)
@@ -79,6 +84,14 @@ Handles messages that require Chrome API access the content script does not have
 **`ui-dom-inspector:bridge-page-state`**:
 - Posts a page state payload to the bridge `/session/update` endpoint
 - Used by the "Send page state" button as a manual re-send
+
+**`ui-dom-inspector:auto-capture`**:
+- Triggered by the content script when a `capture-snapshot` command arrives from the bridge
+- Reads the pinned tab from session storage, calls `captureVisibleTab`, posts the JPEG to `/snapshot`
+
+**`ui-dom-inspector:set-badge`**:
+- Triggered by the content script to relay `agentActive` state from poll responses
+- Calls `setBadge("agent-active")` or `setBadge("connected")` so the badge turns yellow during agent tool calls without waiting for the 1-minute health alarm
 
 ---
 

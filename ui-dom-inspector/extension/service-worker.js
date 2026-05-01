@@ -174,6 +174,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  // Content script relays agentActive state from poll responses so the badge
+  // updates within 2 s of a tool call starting — no waiting for the 1-min alarm.
+  if (message.type === "ui-dom-inspector:set-badge") {
+    setBadge(message.state).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
   // Capture visible tab screenshot
   if (message.type === "ui-dom-inspector:capture-snapshot") {
     chrome.tabs.captureVisibleTab(message.windowId, { format: "jpeg", quality: 70 })
@@ -194,6 +201,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then((result) => { checkHealth(); sendResponse(result); })
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
+  }
+
+  // Agent-initiated capture — content script relays here because only the
+  // service worker can call captureVisibleTab.
+  if (message.type === "ui-dom-inspector:auto-capture") {
+    chrome.storage.session.get(["pinnedTabId", "pinnedTabUrl"])
+      .then(async (stored) => {
+        const tabId = stored.pinnedTabId;
+        if (!tabId) return;
+        const tab = await chrome.tabs.get(tabId);
+        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 70 });
+        await postJson("/snapshot", {
+          pageUrl: message.pageUrl || stored.pinnedTabUrl || "",
+          screenshotDataUrl: dataUrl
+        });
+        checkHealth();
+      })
+      .catch(() => {});
+    return false;
   }
 
   return false;
