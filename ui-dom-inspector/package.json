@@ -10,10 +10,14 @@
     "bridge:stop": "node scripts/stop-bridge.js",
     "mcp": "node mcp-server/server.js",
     "status": "node scripts/status.js",
-    "check": "node scripts/check-setup.js"
+    "check": "node scripts/check-setup.js",
+    "icons": "node scripts/generate-icons.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.5",
     "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "sharp": "^0.34.5"
   }
 }

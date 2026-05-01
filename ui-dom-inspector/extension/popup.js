@@ -13,7 +13,7 @@ const logEl       = document.getElementById("log");
 const selectBtn   = document.getElementById("select-element");
 const selectIcon  = document.getElementById("select-icon");
 const selectLabel = document.getElementById("select-label");
-const clearPinBtn = document.getElementById("clear-pin");
+const pinToggle   = document.getElementById("pin-toggle");
 
 let selectingActive = false;
 
@@ -63,7 +63,7 @@ function renderPinnedTab(url, favicon) {
   if (url) {
     tabUrlEl.textContent = url;
     tabUrlEl.className = "tab-url set";
-    clearPinBtn.style.display = "";
+    pinToggle.classList.add("on");
     if (favicon) {
       tabFavicon.src = favicon;
       tabFavicon.style.display = "";
@@ -72,7 +72,7 @@ function renderPinnedTab(url, favicon) {
     tabUrlEl.textContent = "No tab pinned — actions use active tab";
     tabUrlEl.className = "tab-url";
     tabFavicon.style.display = "none";
-    clearPinBtn.style.display = "none";
+    pinToggle.classList.remove("on");
   }
 }
 
@@ -110,41 +110,39 @@ async function getTargetTab() {
   }
 })();
 
-// ── Pin current tab ───────────────────────────────────────────────────────────
-document.getElementById("pin-tab").addEventListener("click", async () => {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) throw new Error("No active tab found");
+// ── Pin toggle ────────────────────────────────────────────────────────────────
+pinToggle.addEventListener("click", async () => {
+  const isPinned = pinToggle.classList.contains("on");
 
-    await chrome.storage.session.set({
-      [STORAGE_TAB_ID]: tab.id,
-      [STORAGE_TAB_URL]: tab.url,
-      [STORAGE_TAB_TITLE]: tab.title,
-      [STORAGE_TAB_FAVICON]: tab.favIconUrl || ""
-    });
-    renderPinnedTab(tab.url, tab.favIconUrl);
+  if (isPinned) {
+    await clearPinnedStorage();
+    renderPinnedTab(null, null);
+    fetch(`${BRIDGE}/session/pinned-tab`, { method: "DELETE" }).catch(() => {});
+    log("Pin cleared", "dim");
+  } else {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) throw new Error("No active tab found");
 
-    // Tell bridge about the pinned tab so Claude can read the URL
-    fetch(`${BRIDGE}/session/pinned-tab`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tabId: tab.id, url: tab.url, title: tab.title })
-    }).catch(() => {});
+      await chrome.storage.session.set({
+        [STORAGE_TAB_ID]: tab.id,
+        [STORAGE_TAB_URL]: tab.url,
+        [STORAGE_TAB_TITLE]: tab.title,
+        [STORAGE_TAB_FAVICON]: tab.favIconUrl || ""
+      });
+      renderPinnedTab(tab.url, tab.favIconUrl);
 
-    log(`Pinned: ${tab.url}`, "ok");
-  } catch (err) {
-    log(`Pin failed: ${err.message}`, "err");
+      fetch(`${BRIDGE}/session/pinned-tab`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tabId: tab.id, url: tab.url, title: tab.title })
+      }).catch(() => {});
+
+      log(`Pinned: ${tab.url}`, "ok");
+    } catch (err) {
+      log(`Pin failed: ${err.message}`, "err");
+    }
   }
-});
-
-// ── Clear pin ─────────────────────────────────────────────────────────────────
-clearPinBtn.addEventListener("click", async () => {
-  await clearPinnedStorage();
-  renderPinnedTab(null, null);
-  fetch(`${BRIDGE}/session/pinned-tab`, {
-    method: "DELETE"
-  }).catch(() => {});
-  log("Pin cleared", "dim");
 });
 
 // ── Select element ────────────────────────────────────────────────────────────

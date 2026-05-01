@@ -108,6 +108,75 @@
         color: #7ab0f8;
       }
 
+      /* ── Pin toggle ── */
+      .pin-toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 10px;
+        border: 1px solid #22223a;
+        border-radius: 6px;
+        background: #1c1c30;
+        cursor: pointer;
+        transition: background 0.12s, border-color 0.12s;
+        user-select: none;
+      }
+
+      .pin-toggle-row:hover {
+        background: #232340;
+        border-color: #3a3a60;
+      }
+
+      .pin-toggle-row.on {
+        background: #172040;
+        border-color: #2a3a60;
+      }
+
+      .pin-toggle-row.on:hover {
+        background: #1e2c55;
+        border-color: #3a5090;
+      }
+
+      .pin-toggle-label {
+        font-size: 12px;
+        color: #b0b0d0;
+        transition: color 0.12s;
+      }
+
+      .pin-toggle-row.on .pin-toggle-label {
+        color: #7ab0f8;
+      }
+
+      .toggle-track {
+        width: 28px;
+        height: 16px;
+        border-radius: 8px;
+        background: #2a2a4a;
+        position: relative;
+        flex-shrink: 0;
+        transition: background 0.2s;
+      }
+
+      .pin-toggle-row.on .toggle-track {
+        background: #2255aa;
+      }
+
+      .toggle-thumb {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #5050a0;
+        transition: left 0.2s, background 0.2s;
+      }
+
+      .pin-toggle-row.on .toggle-thumb {
+        left: 14px;
+        background: #7ab0f8;
+      }
+
       /* ── Buttons ── */
       .btn {
         display: flex;
@@ -207,14 +276,12 @@
         <img class="tab-favicon" id="tab-favicon" src="" alt="" style="display:none" />
         <span class="tab-url" id="tab-url">No tab pinned — actions use active tab</span>
       </div>
-      <button class="btn primary" id="pin-tab">
-        <span class="btn-icon">&#9679;</span>
-        <span class="btn-label">Pin current tab as target</span>
-      </button>
-      <button class="btn" id="clear-pin" style="display:none">
-        <span class="btn-icon">&#10005;</span>
-        <span class="btn-label">Clear pinned tab</span>
-      </button>
+      <div class="pin-toggle-row" id="pin-toggle">
+        <span class="pin-toggle-label">Pin current tab as target</span>
+        <div class="toggle-track">
+          <div class="toggle-thumb"></div>
+        </div>
+      </div>
     </div>
 
     <div class="section">
