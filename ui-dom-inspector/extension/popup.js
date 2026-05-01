@@ -101,6 +101,9 @@ async function getTargetTab() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 (async () => {
+  // Tell the service worker the popup opened so it refreshes the badge immediately
+  chrome.runtime.sendMessage({ type: "ui-dom-inspector:popup-opened" }).catch(() => {});
+
   const [bridgeData] = await Promise.all([checkBridge(), loadPinnedTab()]);
   if (bridgeData) {
     log("Ready", "dim");

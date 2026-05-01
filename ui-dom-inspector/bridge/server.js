@@ -13,8 +13,22 @@ let sessionState = {
   updatedAt: null,
   payload: null,
   latestSnapshot: null,
-  pinnedTab: null   // { tabId, url, title } — set by the extension popup
+  pinnedTab: null,      // { tabId, url, title } — set by the extension popup
+  agentActive: false,   // true while an MCP tool call is in progress
+  agentActiveAt: null   // ISO timestamp — auto-cleared after 30 s
 };
+
+// Auto-clear agentActive if the MCP server crashes mid-tool and never sends idle
+const AGENT_ACTIVE_TIMEOUT_MS = 30_000;
+setInterval(() => {
+  if (sessionState.agentActive && sessionState.agentActiveAt) {
+    const elapsed = Date.now() - new Date(sessionState.agentActiveAt).getTime();
+    if (elapsed > AGENT_ACTIVE_TIMEOUT_MS) {
+      sessionState.agentActive = false;
+      sessionState.agentActiveAt = null;
+    }
+  }
+}, 5_000);
 
 async function ensureStorage() {
   await fs.mkdir(artifactsDir, { recursive: true });
@@ -77,8 +91,21 @@ const server = http.createServer(async (req, res) => {
       port,
       hasSession: !!sessionState.payload,
       hasSnapshot: !!sessionState.latestSnapshot,
-      pinnedTab: sessionState.pinnedTab
+      pinnedTab: sessionState.pinnedTab,
+      agentActive: sessionState.agentActive
     });
+    return;
+  }
+
+  // ── Agent status ────────────────────────────────────────────────────────────
+  // Called by the MCP server before and after each tool call.
+  // The extension service worker polls /health to read agentActive and updates
+  // the badge colour: green (idle) → yellow (agent reading) → green (done).
+  if (req.method === "POST" && req.url === "/session/agent-status") {
+    const body = await readBody(req);
+    sessionState.agentActive = !!body.active;
+    sessionState.agentActiveAt = body.active ? new Date().toISOString() : null;
+    sendJson(res, 200, { ok: true, agentActive: sessionState.agentActive });
     return;
   }
 

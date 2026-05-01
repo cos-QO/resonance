@@ -5,6 +5,7 @@
   "description": "Live DOM, style, and screenshot inspection for supervised UI work.",
   "permissions": [
     "activeTab",
+    "alarms",
     "storage",
     "tabs",
     "scripting"
@@ -13,8 +14,19 @@
     "<all_urls>",
     "http://127.0.0.1:47771/*"
   ],
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
   "action": {
     "default_title": "UI DOM Inspector",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png"
+    },
     "default_popup": "popup.html"
   },
   "background": {
@@ -23,15 +35,9 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content-script.js"
-      ],
-      "css": [
-        "overlay.css"
-      ],
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "css": ["overlay.css"],
       "run_at": "document_idle"
     }
   ]

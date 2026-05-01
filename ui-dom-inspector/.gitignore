@@ -1,3 +1,5 @@
 node_modules/
 artifacts/
 bridge/session-state.json
+bridge/bridge.log
+bridge/bridge.pid

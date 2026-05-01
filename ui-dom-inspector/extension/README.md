@@ -16,7 +16,8 @@ It runs inside the browser and is the only layer with direct access to the live 
 | `content-script.js` | Injected into every page: selection mode, element inspection, DOM access |
 | `service-worker.js` | Background: handles screenshot capture, relays page state to bridge |
 | `overlay.css` | Injected styles: crosshair cursor during selection, hover/selected outlines |
-| `icon.svg` | Minimal icon asset for the inspector |
+| `icon.svg` | Source vector icon asset |
+| `icon-16.png` / `icon-32.png` / `icon-48.png` / `icon-128.png` | Manifest-ready extension icons |
 
 ---
 
@@ -107,12 +108,20 @@ To reload after code changes: click the reload icon on the extension card.
 
 ## Icon
 
-The extension now includes a minimal icon at `icon.svg`.
+The extension now includes:
 
-It visually represents:
+- `icon.svg` as the source asset
+- `icon-16.png`
+- `icon-32.png`
+- `icon-48.png`
+- `icon-128.png`
+
+These PNGs are wired into `manifest.json`, so Chrome should show the custom icon after the extension is reloaded.
+
+The icon visually represents:
 
 - a UI surface
 - a highlighted inspected element
 - a lens / inspector metaphor
 
-It is not wired into the manifest yet because Chrome extension icons are safest when exported as PNG sizes (`16`, `32`, `48`, `128`). This SVG is the source asset for that export step.
+If Chrome still shows the old icon, reload the unpacked extension from `chrome://extensions`.
