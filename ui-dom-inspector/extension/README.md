@@ -1,30 +1,103 @@
-# Extension
+# Chrome Extension
 
-Planned Chrome extension for `UI DOM Inspector`.
+Manifest V3 Chrome extension for the UI DOM Inspector.
 
-## V1 responsibilities
+It runs inside the browser and is the only layer with direct access to the live page — DOM, computed styles, element geometry, and screenshots.
 
-- selected-element mode
-- DOM inspection
-- computed-style export
-- bounds and ancestry export
-- visible-tab screenshot capture
-- selected-element crop capture
-- lightweight compression
-- overlay for diagnostics
+---
 
-## Likely files
+## Files
 
-- `manifest.json`
-- `service-worker.js`
-- `content-script.js`
-- `overlay.css`
+| File | Role |
+|---|---|
+| `manifest.json` | Extension manifest: permissions, content scripts, service worker, popup |
+| `popup.html` | Extension popup UI — what you see when you click the toolbar icon |
+| `popup.js` | Popup logic: tab pinning, button actions, bridge health check |
+| `content-script.js` | Injected into every page: selection mode, element inspection, DOM access |
+| `service-worker.js` | Background: handles screenshot capture, relays page state to bridge |
+| `overlay.css` | Injected styles: crosshair cursor during selection, hover/selected outlines |
 
-## Current v1 behavior
+---
 
-- popup can enable element selection
-- content script tracks the selected element
-- popup can request a visible-tab snapshot
-- service worker sends screenshots and page state to the local bridge
+## Popup
 
-This is a first-pass skeleton, not the finished inspector.
+The popup is the control panel.
+
+**Header**: shows bridge connection status (green dot = connected, red = bridge not running).
+
+**Target Tab section**:
+- Displays the pinned tab URL when one is set
+- "Pin current tab" stores the active tab as the inspection target and posts it to the bridge
+- "Clear pinned tab" removes the pin
+
+**Inspect section**:
+- **Select element** — starts element selection mode on the pinned tab (or active tab if none is pinned). Click again or press Escape to cancel.
+- **Capture snapshot** — takes a JPEG screenshot of the pinned tab and saves it via the bridge
+- **Send page state** — manually pushes the current page state (URL + selected element) to the bridge. Normally this happens automatically after selection.
+
+**Log area**: shows status messages, errors, and confirmations.
+
+---
+
+## Content script
+
+Injected into every page at `document_idle`.
+
+**Selection mode**:
+- When activated, adds `ui-dom-inspector-selecting` to `document.body` (triggers crosshair cursor via CSS)
+- On mousemove: adds `ui-dom-inspector-hover` class to element under cursor
+- On click: locks selection, removes hover, adds `data-ui-dom-inspector-selected` attribute
+- On Escape: exits selection mode without selecting
+
+**After selection**:
+- Immediately calls `fetch` to post the page state (URL + full element payload) to the bridge at `http://127.0.0.1:47771/session/update`
+- Sends `ui-dom-inspector:selection-complete` runtime message to the popup if it is still open
+
+**Element payload** includes:
+- selector (id, data-qo-id, or tag+classes)
+- tag, role, text content
+- full class list
+- bounding box (x, y, width, height — rounded integers)
+- computed styles (color, background, border-radius, font, spacing, display, gap, dimensions)
+- ancestry (up to 8 levels)
+- children summary (up to 12 children)
+- component hints (Button, Input, Modal, Navigation, Card, ToggleGroup, Chip)
+
+---
+
+## Service worker
+
+Handles messages that require Chrome API access the content script does not have.
+
+**`ui-dom-inspector:capture-snapshot`**:
+- Calls `chrome.tabs.captureVisibleTab` using the Promise API
+- Posts the JPEG data URL + page URL to the bridge `/snapshot` endpoint
+- Returns the saved artifact metadata
+
+**`ui-dom-inspector:bridge-page-state`**:
+- Posts a page state payload to the bridge `/session/update` endpoint
+- Used by the "Send page state" button as a manual re-send
+
+---
+
+## Permissions
+
+| Permission | Why |
+|---|---|
+| `activeTab` | Access the current tab for snapshot capture |
+| `tabs` | Read tab URL, title, favicon; switch to pinned tab |
+| `storage` | Persist pinned tab across popup open/close (session storage) |
+| `scripting` | Inject messages into the content script |
+| `host_permissions: <all_urls>` | Content script runs on any page |
+| `host_permissions: http://127.0.0.1:47771/*` | Content script can fetch the local bridge |
+
+---
+
+## Loading in Chrome
+
+1. Open `chrome://extensions`
+2. Enable **Developer Mode**
+3. Click **Load unpacked**
+4. Select this `extension/` folder
+
+To reload after code changes: click the reload icon on the extension card.
