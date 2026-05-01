@@ -24,6 +24,12 @@ env/
 .claude/
 .mcp.json
 
+# Fresh/ is the committed project template — its .claude/ and .mcp.json are
+# intentionally tracked so the full architecture is available out of the box.
+!Fresh/.claude/
+!Fresh/.claude/**
+!Fresh/.mcp.json
+
 # ── OS & editor ───────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

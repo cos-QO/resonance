@@ -1,5 +1,6 @@
-node_modules/
-artifacts/
-bridge/session-state.json
-bridge/bridge.log
-bridge/bridge.pid
+# Inspector runtime — generated on each run
+ui-dom-inspector/node_modules/
+ui-dom-inspector/artifacts/
+ui-dom-inspector/bridge/session-state.json
+ui-dom-inspector/bridge/bridge.log
+ui-dom-inspector/bridge/bridge.pid

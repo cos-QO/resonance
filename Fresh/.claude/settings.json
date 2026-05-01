@@ -1,0 +1,26 @@
+{
+  "env": {
+    "SLASH_COMMAND_TOOL_CHAR_BUDGET": "40000"
+  },
+  "permissions": {
+    "allow": [
+      "Read:*",
+      "Write:*",
+      "Edit:*",
+      "MultiEdit:*",
+      "Glob:*",
+      "Grep:*",
+      "LS:*",
+      "Bash:*",
+      "TodoWrite:*",
+      "WebFetch:*",
+      "WebSearch:*",
+      "mcp__*"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/secrets/**)"
+    ]
+  }
+}
